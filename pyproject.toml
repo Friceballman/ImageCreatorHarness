@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=75,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "image-workbench"
+version = "0.1.0"
+description = "ローカル画像制作ハーネス"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=2.0,<3",
+    "Pillow>=11,<13",
+    "pydantic>=2.10,<3",
+    "rich>=13.9,<15",
+    "typer>=0.15,<1",
+]
+
+[project.scripts]
+iwb = "image_workbench.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
