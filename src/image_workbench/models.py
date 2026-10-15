@@ -122,46 +122,34 @@ class RequirementSnapshot(DataModel):
     priority: int = Field(ge=1, le=5)
 
 
-class EffectiveSettings(DataModel):
-    model: str
-    size: str
-    quality: str
-    output_format: str
-    count: int = Field(ge=1, le=10)
-    sources: dict[str, Literal["command_line", "config.toml", "built_in"]]
-
-
 class Generation(Record):
     id: UUID4
     project_id: UUID4
     operation: Literal["generate", "edit"]
-    edit_mode: Literal["none", "whole", "masked"]
+    edit_mode: Literal["none", "whole"]
     status: Literal[
         "draft", "awaiting_approval", "running", "succeeded",
-        "partially_succeeded", "failed", "cancelled",
+        "partially_succeeded", "failed", "blocked", "result_unknown", "cancelled",
     ]
     original_instruction: str
-    final_prompt: str
+    codex_instruction: str
     reference_snapshots: list[ReferenceSnapshot]
     requirements_snapshot: list[RequirementSnapshot]
     source_candidate_id: UUID4 | None = None
     source_candidate_snapshot: dict[str, Any] | None = None
-    mask_snapshot: dict[str, Any] | None = None
-    effective_settings: EffectiveSettings
     plan_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    cost_estimate: dict[str, Any]
+    requested_count_hint: int = Field(ge=1, le=10)
+    requested_count_source: Literal["command_line", "config.toml", "built_in"]
+    actual_output_count: int | None = Field(default=None, ge=0)
+    registered_candidate_count: int = Field(default=0, ge=0)
+    conversation_context: dict[str, Any] = Field(default_factory=dict)
     approval: dict[str, Any] | None = None
-    requested_count: int = Field(ge=1, le=10)
     candidate_ids: list[UUID4] = Field(default_factory=list)
-    failed_slots: list[int] = Field(default_factory=list)
-    attempts: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[dict[str, Any]] = Field(default_factory=list)
-    provider_request_ids: list[str] = Field(default_factory=list)
     created_at: UTCDateTime
     approved_at: UTCDateTime | None = None
     started_at: UTCDateTime | None = None
     finished_at: UTCDateTime | None = None
-    retry_of_generation_id: UUID4 | None = None
 
 
 class CandidateStatusChange(DataModel):

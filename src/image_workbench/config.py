@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,10 +17,6 @@ class ConfigError(ValueError):
 class ConfigValues(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    default_model: Literal["gpt-image-2"] = "gpt-image-2"
-    default_size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] = "1024x1024"
-    default_quality: Literal["low", "medium", "high"] = "medium"
-    default_output_format: Literal["png", "jpeg", "webp"] = "png"
     default_candidate_count: int = Field(default=4, ge=1, le=10)
     max_candidate_count: Literal[10] = 10
     projects_dir: Path = Path("projects")
@@ -31,7 +26,6 @@ class ConfigValues(BaseModel):
 class ResolvedConfig:
     values: ConfigValues
     sources: dict[str, Literal["command_line", "config.toml", "built_in"]]
-    api_key_configured: bool
 
 
 def _format_validation_error(error: ValidationError) -> str:
@@ -49,15 +43,11 @@ def load_config(
 ) -> ResolvedConfig:
     """CLI引数、config.toml、組み込み値の順で設定を解決する。
 
-    APIキーの値は読み込まず、OPENAI_API_KEYが設定されているかだけを返す。
+    Codexアカウントや利用枠に関する認証情報は扱わない。
     """
     path = config_path or (Path.cwd() / "config.toml")
     values: dict[str, Any] = {}
     sources: dict[str, Literal["command_line", "config.toml", "built_in"]] = {
-        "default_model": "built_in",
-        "default_size": "built_in",
-        "default_quality": "built_in",
-        "default_output_format": "built_in",
         "default_candidate_count": "built_in",
         "max_candidate_count": "built_in",
         "projects_dir": "built_in",
@@ -96,5 +86,4 @@ def load_config(
     return ResolvedConfig(
         values=checked_values,
         sources=sources,
-        api_key_configured=bool(os.environ.get("OPENAI_API_KEY")),
     )

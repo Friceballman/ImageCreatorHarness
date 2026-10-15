@@ -1,28 +1,30 @@
-# OpenAI Images API 互換性確認
+# Codex組み込み画像生成との適合確認
 
-最終確認日: 2026-10-09
+最終確認日: 2026-10-13
 
 ## 確認した公式資料
 
-- [GPT-Image-2 model](https://developers.openai.com/api/docs/models/gpt-image-2)
-- [Images API: generate](https://developers.openai.com/api/reference/python/resources/images/methods/generate)
-- [Images API: edit](https://developers.openai.com/api/reference/python/resources/images/methods/edit)
-- [Image generation guide](https://developers.openai.com/api/docs/guides/image-generation)
-- [OpenAI Python SDK](https://github.com/openai/openai-python)
-- [API pricing](https://developers.openai.com/api/docs/pricing)
+- [ChatGPT image generation](https://learn.chatgpt.com/docs/image-generation)
+- [Codex image inputs](https://learn.chatgpt.com/docs/image-inputs)
+- [Codex CLI command line options](https://learn.chatgpt.com/docs/cli/reference)
+- [Codex pricing and usage limits](https://learn.chatgpt.com/docs/pricing)
 
-## MVPで使用する仕様
+## ver4実装に関係する確認事項
 
-- MVPの許可モデルは仕様書どおり`gpt-image-2`のみとする。公式資料でモデルと`v1/images/generations`、`v1/images/edits`の対応を確認した。利用可能な別モデルがあってもMVPへ追加しない。
-- 参照画像なしの生成はPython SDKの`client.images.generate(...)`、参照画像付き生成と編集は`client.images.edit(...)`を使用する。参照画像付き生成は業務記録上`operation=generate`とし、編集元候補がある編集は`operation=edit`として区別する。
-- 公式APIの候補数は1〜10。画像編集は最大16入力画像で、各入力はPNG/JPEG/WebP、50MB未満。プロンプト上限は32,000文字。生成結果はbase64画像データとして返るため、短期URLに依存しない。
-- マスクはPNG、4MB未満、編集元と同じ寸法で、アルファチャンネルを含む必要がある。複数画像時は先頭画像にマスクが適用され、マスクは編集範囲を厳密には保証しない。
-- API全体にはより広いオプションがあるが、MVPでは仕様書記載のサイズ（`1024x1024`、`1536x1024`、`1024x1536`、`auto`）、品質（`low`、`medium`、`high`）、形式（`png`、`jpeg`、`webp`）に限定する。非対応値を自動置換しない。
-- OpenAI Python SDKは既定で複数種の失敗を自動再試行する。仕様に従いProvider初期化時にSDKの自動再試行を無効化し、明確なHTTP 429だけをアプリ側で制御する。
-- 料金ページは画像・テキストのトークン単価と料金計算ツールを案内している。料金はコードへ固定せず、確認日付きの根拠と算定条件が揃わない場合は概算不明と表示する。
+- 対応するCodex/ChatGPTの対話面では、自然言語指示で画像の生成・編集を依頼できる。Codexの拡張チャットにも参照画像を添付して編集・視覚参照に使える。
+- Codex CLIは入力画像を `-i` / `--image` で会話に添付できる。確認したCLI資料は画像の入力経路を示すが、画像生成機能をローカルCLIから呼び出す公開コマンドや、生成物が特定のローカルパスへ自動保存される保証は示していない。
+- したがって `iwb` は生成機能を呼ばず、Codex会話で生成された画像ファイルを利用者/Codexが作業領域へ用意し、`iwb ... register` がそのファイルを検証・保存する設計とする。ファイルを取得できない環境では候補登録を完了扱いにしない。
+- 公式案内では組み込み画像生成は一般Codex利用枠を消費し、画像の品質・サイズ等により通常ターンより利用枠を平均3〜5倍速く使う場合がある。利用枠到達後にクレジットを消費する場合もある。利用枠とクレジット残量はプラン、ワークスペース、アカウント設定に依存する。
+- リポジトリのCLIから利用枠やクレジット残高を照会・遮断する公式手段は確認できていない。Codex画面に上限が示されたら停止し、追加クレジット・API・他サービスへ移行しない。アカウント側でクレジットが利用可能な場合の自動課金をこのリポジトリだけで保証して止めることはできない。
+- 組み込み生成モデル名は公式資料上 `gpt-image-2`。これは会話機能の内部モデル情報であり、このリポジトリがAPI model parameterとして送信したり、モデル選択設定を持ったりする意味ではない。
 
-## 未確認事項と差分
+## 未確定・環境依存
 
-- APIキーは環境に設定されていないため、ユーザーのOrganizationにおける`gpt-image-2`利用権限、利用枠、Organization verification要否は未確認。ライブAPI呼び出しは行っていない。
-- アカウント固有の権限確認は、API実行を計画する段階で明示承認を得てから行う。権限不足時に別モデルへ自動変更しない。
-- 2026-10-09確認時点で仕様書の固定値と公式APIの現行記載に、MVP実装を妨げる不一致は見つからなかった。公式資料の更新時は本書と仕様書の差分を再確認する。
+- 画像生成の提供可否・利用回数はCodexクライアント、プラン、ワークスペース設定に依存する。
+- 生成物のローカル保存方法・出力形式・寸法はクライアント機能に依存する。自動取得の保証がないため、実装は明示的なファイル受け渡しと検証を前提にする。
+- 利用枠画面が見えない状況では残量・費用を断定しない。利用者が上限到達を報告した場合は新しい生成を始めず、blocked状態を記録する。
+
+## 実施内容
+
+- 公式資料の確認のみ。画像生成の実行、外部API呼び出し、API実費はなし。
+- ツール・アカウントの実際の上限表示、クレジット設定、画像エクスポート動作は確認していない。

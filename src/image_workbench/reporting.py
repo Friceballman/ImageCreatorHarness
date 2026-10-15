@@ -1,4 +1,4 @@
-"""生成・編集実験のMarkdown/JSON監査レポート。"""
+"""Codex会話での生成・編集履歴をMarkdown/JSONへまとめる。"""
 
 from __future__ import annotations
 
@@ -6,13 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from image_workbench.models import (
-    Candidate,
-    ExecutionEvent,
-    Generation,
-    Report,
-    Review,
-)
+from image_workbench.models import Candidate, ExecutionEvent, Generation, Report, Review
 from image_workbench.storage import atomic_write_bytes, atomic_write_model, read_model
 
 
@@ -29,20 +23,13 @@ def _load_report_parts(project_root: Path, generation: Generation) -> Report:
 
     event_dir = project_root / "generations" / str(generation.id) / "events"
     events = [read_model(path, ExecutionEvent) for path in sorted(event_dir.glob("*.json"))]
-    saved_count = len(candidates)
     summary: dict[str, Any] = {
-        "requested_count": generation.requested_count,
-        "saved_count": saved_count,
-        "failed_count": len(generation.failed_slots),
-        "api_attempt_count": len(generation.attempts),
+        "requested_count_hint": generation.requested_count_hint,
+        "actual_output_count": generation.actual_output_count,
+        "registered_candidate_count": generation.registered_candidate_count,
         "final_status": generation.status,
-        "remaining_work": [
-            f"候補枠{slot}の結果を確認してください。" for slot in generation.failed_slots
-        ],
-        "next_action": (
-            "候補を比較し、レビューと評価を記録してください。"
-            if candidates else "失敗理由を確認し、必要なら再計画してください。"
-        ),
+        "remaining_work": _remaining_work(generation, candidates),
+        "next_action": _next_action(generation, candidates),
     }
     return Report(
         generation=generation,
@@ -52,6 +39,41 @@ def _load_report_parts(project_root: Path, generation: Generation) -> Report:
         generated_at=datetime.now(timezone.utc),
         summary=summary,
     )
+
+
+def _remaining_work(generation: Generation, candidates: list[Candidate]) -> list[str]:
+    command = "generate" if generation.operation == "generate" else "edit"
+    if generation.status == "blocked":
+        return ["利用枠または画像生成機能の状態を確認してください。"]
+    if generation.status == "result_unknown":
+        return ["生成結果と利用枠を確認するまで再生成しないでください。確認後、結果に応じて画像登録または新しい計画を作成してください。"]
+    if generation.status == "draft":
+        return [f"Codex会話で計画を提示し、iwb {command} request-approvalで承認待ちを記録してください。"]
+    if generation.status == "awaiting_approval":
+        return [f"利用者の明示承認を待ち、承認後にiwb {command} approveを記録してください。"]
+    if generation.status == "running":
+        return ["Codex会話の生成結果を確認し、画像ファイルを登録してください。"]
+    if not candidates:
+        return ["生成結果は候補として登録されていません。原因と会話結果を確認してください。"]
+    pending = [candidate for candidate in candidates if candidate.status == "pending"]
+    return [f"候補 {candidate.id} をレビューしてください。" for candidate in pending]
+
+
+def _next_action(generation: Generation, candidates: list[Candidate]) -> str:
+    command = "generate" if generation.operation == "generate" else "edit"
+    if generation.status == "blocked":
+        return "利用枠回復後に利用者が新しい計画を依頼した場合のみ再開してください。"
+    if generation.status == "result_unknown":
+        return "生成結果を確認して状態を確定してください。自動再生成はしません。"
+    if generation.status == "draft":
+        return f"Codex会話で計画を提示し、iwb {command} request-approvalを記録してください。"
+    if generation.status == "awaiting_approval":
+        return f"利用者の明示承認を待ち、承認後にiwb {command} approveを記録してください。"
+    if generation.status == "running":
+        return "Codex会話から得られた画像を検証し、iwbで登録してください。"
+    if candidates:
+        return "候補を比較し、レビューと採用判断を記録してください。"
+    return "生成結果とエラー内容を確認し、必要なら新しい計画を作成してください。"
 
 
 def render_markdown(report: Report) -> str:
@@ -65,33 +87,24 @@ def render_markdown(report: Report) -> str:
         f"- 操作: `{generation.operation}` / `{generation.edit_mode}`",
         f"- 状態: `{generation.status}`",
         f"- 作成日時: {generation.created_at.isoformat()}",
-        f"- 承認日時: {generation.approved_at.isoformat() if generation.approved_at else '未承認'}",
-        f"- 要求枚数: {generation.requested_count}",
-        f"- 保存枚数: {len(report.candidates)}",
-        f"- 失敗枠数: {len(generation.failed_slots)}",
-        f"- API試行数: {len(generation.attempts)}",
-        f"- Provider request ID: {', '.join(generation.provider_request_ids) or '取得不可'}",
-        f"- 費用見積り: {generation.cost_estimate.get('display', '取得不可')}",
+        f"- 承認日時: {generation.approved_at.isoformat() if generation.approved_at else '未記録'}",
+        f"- 生成開始日時: {generation.started_at.isoformat() if generation.started_at else '未記録'}",
+        f"- 希望枚数（目安）: {generation.requested_count_hint}",
+        f"- 実出力数: {generation.actual_output_count if generation.actual_output_count is not None else '未取得'}",
+        f"- 登録候補数: {generation.registered_candidate_count}",
+        "- 画像生成経路: Codex会話内の組み込み機能",
         "",
-        "## 指示と設定",
+        "## 指示",
         "",
         "### 元指示",
         "",
         generation.original_instruction,
         "",
-        "### 最終プロンプト",
+        "### Codexへ渡す指示",
         "",
-        generation.final_prompt,
+        generation.codex_instruction,
         "",
-        "### 実効設定",
-        "",
-        f"- モデル: `{generation.effective_settings.model}`",
-        f"- サイズ: `{generation.effective_settings.size}`",
-        f"- 品質: `{generation.effective_settings.quality}`",
-        f"- 出力形式: `{generation.effective_settings.output_format}`",
-        f"- 設定の出所: `{generation.effective_settings.sources}`",
-        "",
-        "## 送信画像",
+        "## 参照画像",
         "",
     ]
     if generation.source_candidate_snapshot:
@@ -102,16 +115,12 @@ def render_markdown(report: Report) -> str:
         )
     for reference in generation.reference_snapshots:
         lines.append(
-            f"- 参照 `{reference.id}` ({reference.role}, 優先度 {reference.priority}): "
-            f"{reference.description} / SHA-256 `{reference.sha256}`"
-        )
-    if generation.mask_snapshot:
-        lines.append(
-            f"- マスク: `{generation.mask_snapshot.get('file')}`, "
-            f"SHA-256 `{generation.mask_snapshot.get('sha256')}`"
+            f"- `{reference.id}` ({reference.role}, 優先度 {reference.priority}, "
+            f"使用{'あり' if reference.submitted else 'なし'}): {reference.description} "
+            f"/ SHA-256 `{reference.sha256}`"
         )
     if not generation.reference_snapshots and not generation.source_candidate_id:
-        lines.append("- 送信画像なし")
+        lines.append("参照画像はありません。")
 
     lines.extend(["", "## 要件スナップショット", ""])
     if generation.requirements_snapshot:
@@ -140,25 +149,18 @@ def render_markdown(report: Report) -> str:
                 ]
             )
     else:
-        lines.append("候補は保存されていません。")
+        lines.append("候補は登録されていません。")
 
     lines.extend(["## レビュー", ""])
     if report.reviews:
         for review in report.reviews:
-            lines.append(
-                f"- `{review.candidate_id}` / {review.created_at.isoformat()} / "
-                f"{review.rationale}"
-            )
+            lines.append(f"- `{review.candidate_id}` / {review.created_at.isoformat()} / {review.rationale}")
             for result in review.requirement_results:
-                lines.append(
-                    f"  - 要件 `{result.requirement_id}`: `{result.result}` — {result.comment}"
-                )
+                lines.append(f"  - 要件 `{result.requirement_id}`: `{result.result}` — {result.comment}")
     else:
         lines.append("レビューはありません。")
 
-    lines.extend(["", "## 試行とイベント", ""])
-    for attempt in generation.attempts:
-        lines.append(f"- 試行: `{attempt}`")
+    lines.extend(["", "## 会話イベント", ""])
     for event in report.events:
         lines.append(
             f"- {event.timestamp.isoformat()} / `{event.stage}` / "
@@ -167,7 +169,7 @@ def render_markdown(report: Report) -> str:
     lines.extend(
         [
             "",
-            "## エラーと次の操作",
+            "## 残作業と次の操作",
             "",
             f"- 残作業: {report.summary['remaining_work'] or 'なし'}",
             f"- 次の操作: {report.summary['next_action']}",
@@ -184,8 +186,11 @@ def write_report(project_root: Path, generation: Generation) -> Report:
     report_dir = project_root / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_model(report_dir / f"{generation.id}.json", report, replace=True)
-    markdown = render_markdown(report).encode("utf-8")
-    atomic_write_bytes(report_dir / f"{generation.id}.md", markdown, replace=True)
+    atomic_write_bytes(
+        report_dir / f"{generation.id}.md",
+        render_markdown(report).encode("utf-8"),
+        replace=True,
+    )
     return report
 
 

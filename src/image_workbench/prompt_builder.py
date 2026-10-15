@@ -17,11 +17,9 @@ def build_final_prompt(
     original_instruction: str,
     references: list[ReferenceSnapshot],
     requirements: list[RequirementSnapshot],
-    size: str,
-    quality: str,
-    output_format: str,
+    requested_count_hint: int,
 ) -> str:
-    """目的、参照、維持、変更、改善、出力条件の順に構成する。"""
+    """Codex会話へ渡す指示を、目的・参照・要件・希望枚数の順に構成する。"""
     if not project_goal.strip() or not original_instruction.strip():
         raise PromptError("案件の目的と今回の指示を指定してください。")
 
@@ -47,17 +45,11 @@ def build_final_prompt(
                 (title, "\n".join(f"- {item.description}" for item in entries))
             )
 
+    sections.append(("出力構図", "利用者が指定した構図・形式の希望を優先してください。"))
     sections.append(
-        (
-            "出力形式・構図",
-            f"画像サイズ: {size}\n品質: {quality}\n出力形式: {output_format}",
-        )
+        ("希望枚数", f"希望枚数は{requested_count_hint}枚です。目安として扱い、厳密な一致は求めません。")
     )
     result = "\n\n".join(f"## {title}\n{body}" for title, body in sections)
-    if len(result) > 32_000:
-        raise PromptError(
-            f"最終プロンプトが上限を超えています。超過文字数: {len(result) - 32_000}"
-        )
     return result
 
 

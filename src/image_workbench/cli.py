@@ -58,12 +58,16 @@ from image_workbench.reporting import read_report, render_markdown, write_report
 from image_workbench.generations import (
     GenerationExecutionError,
     GenerationPlanError,
-    cancel_generation_before_api,
+    approve_generation,
+    block_generation,
+    cancel_generation,
+    fail_generation,
     get_generation,
+    mark_generation_unknown,
     plan_edit,
     plan_generate,
-    plan_retry_failed_slots,
-    run_generation,
+    register_generation_files,
+    request_generation_approval,
     verify_plan,
 )
 
@@ -128,14 +132,6 @@ app.add_typer(report_app, name="report")
 def _config_rows(config: ResolvedConfig) -> list[tuple[str, str, str]]:
     values = config.values
     return [
-        ("default_model", values.default_model, config.sources["default_model"]),
-        ("default_size", values.default_size, config.sources["default_size"]),
-        ("default_quality", values.default_quality, config.sources["default_quality"]),
-        (
-            "default_output_format",
-            values.default_output_format,
-            config.sources["default_output_format"],
-        ),
         (
             "default_candidate_count",
             str(values.default_candidate_count),
@@ -147,11 +143,6 @@ def _config_rows(config: ResolvedConfig) -> list[tuple[str, str, str]]:
             config.sources["max_candidate_count"],
         ),
         ("projects_dir", values.projects_dir.as_posix(), config.sources["projects_dir"]),
-        (
-            "OPENAI_API_KEY",
-            "設定済み" if config.api_key_configured else "未設定",
-            "環境変数",
-        ),
     ]
 
 
@@ -654,26 +645,21 @@ def _show_generation(generation: Generation) -> None:
     table.add_row("操作", generation.operation)
     table.add_row("状態", generation.status)
     table.add_row("Plan hash", generation.plan_hash)
-    table.add_row("候補数", str(generation.requested_count))
-    table.add_row("API呼び出し予定数", "1")
-    if generation.retry_of_generation_id is not None:
-        table.add_row("再試行元", str(generation.retry_of_generation_id))
-        try:
-            source, _ = get_generation(generation.retry_of_generation_id)
-            table.add_row("再試行対象の元枠", ", ".join(map(str, source.failed_slots)))
-        except Exception:
-            table.add_row("再試行対象の元枠", "元実験を読み込めません")
-    table.add_row("モデル / サイズ / 品質 / 形式", " / ".join((
-        generation.effective_settings.model,
-        generation.effective_settings.size,
-        generation.effective_settings.quality,
-        generation.effective_settings.output_format,
-    )))
-    table.add_row("設定の出所", str(generation.effective_settings.sources))
-    table.add_row("費用見積り", str(generation.cost_estimate.get("display", "取得不可")))
+    table.add_row("承認日時", generation.approved_at.isoformat() if generation.approved_at else "未記録")
+    table.add_row("生成開始日時", generation.started_at.isoformat() if generation.started_at else "未記録")
+    table.add_row("希望枚数（目安）", str(generation.requested_count_hint))
+    table.add_row("希望枚数の出所", generation.requested_count_source)
+    table.add_row(
+        "実出力数",
+        str(generation.actual_output_count)
+        if generation.actual_output_count is not None
+        else "未取得",
+    )
+    table.add_row("登録候補数", str(generation.registered_candidate_count))
+    table.add_row("生成経路", "Codex会話内の組み込み機能")
     table.add_row("保存先", str(project_root(project.id) / "generations" / str(generation.id)))
     table.add_row("元指示", generation.original_instruction)
-    table.add_row("最終プロンプト", generation.final_prompt)
+    table.add_row("Codexへ渡す指示", generation.codex_instruction)
     if generation.source_candidate_id is not None:
         source = generation.source_candidate_snapshot or {}
         table.add_row(
@@ -681,12 +667,12 @@ def _show_generation(generation: Generation) -> None:
             f"{generation.source_candidate_id} / {source.get('file', 'パスなし')} / SHA-256 {source.get('sha256', '不明')}",
         )
         table.add_row("編集モード", generation.edit_mode)
-    if generation.mask_snapshot:
-        table.add_row("マスク", str(generation.mask_snapshot))
-    table.add_row("送信参照画像数", str(len(generation.reference_snapshots)))
+    table.add_row("使用参照画像数", str(len(generation.reference_snapshots)))
+    if generation.errors:
+        table.add_row("停止・失敗記録", str(generation.errors))
     console.print(table)
     if generation.reference_snapshots:
-        refs = Table(title="送信する参照画像")
+        refs = Table(title="計画に含む参照画像")
         refs.add_column("参照ID", style="cyan")
         refs.add_column("役割")
         refs.add_column("優先度")
@@ -721,7 +707,7 @@ def _refresh_candidate_report(candidate_id: str) -> None:
         )
 
 
-def _run_generation_command(generation_id: str) -> None:
+def _register_generation_command(generation_id: str, image_paths: list[Path]) -> None:
     try:
         generation, root = get_generation(generation_id)
         verify_plan(generation, root)
@@ -735,34 +721,17 @@ def _run_generation_command(generation_id: str) -> None:
         console.print(f"[red]実験を読み込めませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
 
-    if generation.status not in {"draft", "awaiting_approval"}:
-        console.print(f"[red]この状態の実験は実行できません:[/red] {generation.status}")
-        raise typer.Exit(code=4)
     _show_generation(generation)
-    if not load_config().api_key_configured:
-        console.print("[red]OPENAI_API_KEYが未設定です。APIは呼び出していません。[/red]")
-        raise typer.Exit(code=3)
-
-    console.print(
-        f"[yellow]この操作はOpenAI Images APIを呼び出します。"
-        f"候補数: {generation.requested_count}、費用見積り: 概算不明。[/yellow]"
-    )
-    if not typer.confirm("表示した画像・指示・設定・保存先を確認し、実行を承認しますか？", default=False):
-        try:
-            cancel_generation_before_api(
-                generation.id,
-                displayed_plan_hash=generation.plan_hash,
-            )
-        except GenerationExecutionError as exc:
-            console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(code=exc.exit_code) from exc
-        console.print("実行を取り消しました。APIは呼び出していません。")
+    console.print("画像生成は行いません。Codex会話から保存した画像ファイルを検証・登録します。")
+    if generation.status == "result_unknown" and not typer.confirm(
+        "Codex会話でこのファイルが対象計画の生成結果だと確認しましたか？", default=False
+    ):
+        console.print("結果不明のままです。画像登録を中止しました。")
         raise typer.Exit(code=130)
-
     try:
-        completed = run_generation(
+        completed = register_generation_files(
             generation.id,
-            approved_plan_hash=generation.plan_hash,
+            image_paths,
         )
     except GenerationExecutionError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -774,39 +743,125 @@ def _run_generation_command(generation_id: str) -> None:
         console.print(f"[red]実験記録を保存できませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
     console.print(
-        f"実験が完了しました: {completed.id} "
-        f"(保存候補: {len(completed.candidate_ids)} / 要求: {completed.requested_count})"
+        f"画像を登録しました: {completed.id} "
+        f"(希望: {completed.requested_count_hint}枚 / "
+        f"実出力: {completed.actual_output_count or 0}枚 / "
+        f"登録候補: {completed.registered_candidate_count}件)"
     )
+
+
+def _record_generation_action(action: str, generation_id: str, **kwargs: object) -> None:
+    operations = {
+        "request-approval": request_generation_approval,
+        "approve": approve_generation,
+        "block": block_generation,
+        "mark-unknown": mark_generation_unknown,
+        "fail": fail_generation,
+        "cancel": cancel_generation,
+    }
+    operation = operations[action]
+    try:
+        generation = operation(generation_id, **kwargs)
+    except GenerationExecutionError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=exc.exit_code) from exc
+    except ValueError as exc:
+        console.print(f"[red]入力または計画が不正です:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    except LookupError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=4) from exc
+    except LockConflict as exc:
+        console.print(f"[red]案件が使用中です:[/red] {exc}")
+        raise typer.Exit(code=4) from exc
+    except (OSError, StorageError) as exc:
+        console.print(f"[red]状態と履歴を保存できませんでした:[/red] {exc}")
+        raise typer.Exit(code=6) from exc
+
+    try:
+        _, root = get_generation(generation.id)
+        write_report(root, generation)
+    except Exception as exc:
+        console.print(
+            "[yellow]状態とイベントは記録済みですが、レポートを更新できませんでした。"
+            f"実験ID: {generation.id} / エラー: {type(exc).__name__}[/yellow]"
+        )
+
+    messages = {
+        "request-approval": "計画を提示し、承認待ちとして記録しました。",
+        "approve": "会話での明示承認と生成開始を記録しました。続けてCodex会話で画像生成を行ってください。",
+        "block": "生成開始前の停止を記録しました。",
+        "mark-unknown": "結果不明として記録しました。確認が済むまで再生成しないでください。",
+        "fail": "生成開始後の明確な失敗を記録しました。",
+        "cancel": "承認前の取消を記録しました。",
+    }
+    console.print(f"{messages[action]} 実験ID: {generation.id} / 状態: {generation.status}")
+
+
+def _add_generation_lifecycle_commands(group: typer.Typer) -> None:
+    """generate/edit共通の会話状態記録コマンドを登録する。"""
+    def request_approval(generation_id: str = typer.Argument(..., help="計画ID（UUID v4）")) -> None:
+        _record_generation_action("request-approval", generation_id)
+
+    def approve(generation_id: str = typer.Argument(..., help="計画ID（UUID v4）")) -> None:
+        _record_generation_action("approve", generation_id)
+
+    def block(
+        generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+        reason_code: Literal["usage_limit_reached", "codex_imagegen_unavailable", "output_unavailable"] = typer.Option(
+            ..., "--reason-code", help="生成開始前に停止した理由"
+        ),
+        message: str = typer.Option(..., "--message", help="利用者に伝える停止理由")
+    ) -> None:
+        _record_generation_action("block", generation_id, reason_code=reason_code, message=message)
+
+    def mark_unknown(
+        generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+        reason: str = typer.Option(..., "--reason", help="結果を確定できない理由"),
+    ) -> None:
+        _record_generation_action("mark-unknown", generation_id, reason=reason)
+
+    def fail(
+        generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+        reason_code: Literal["codex_imagegen_unavailable", "output_transfer_failed", "disk_full", "permission_denied"] = typer.Option(
+            ..., "--reason-code", help="生成開始後に確認された失敗理由"
+        ),
+        message: str = typer.Option(..., "--message", help="失敗内容")
+    ) -> None:
+        _record_generation_action("fail", generation_id, reason_code=reason_code, message=message)
+
+    def cancel(
+        generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+        reason: str = typer.Option(..., "--reason", help="取消理由"),
+    ) -> None:
+        _record_generation_action("cancel", generation_id, reason=reason)
+
+    group.command("request-approval")(request_approval)
+    group.command("approve")(approve)
+    group.command("block")(block)
+    group.command("mark-unknown")(mark_unknown)
+    group.command("fail")(fail)
+    group.command("cancel")(cancel)
+
+
+_add_generation_lifecycle_commands(generate_app)
+_add_generation_lifecycle_commands(edit_app)
 
 
 @generate_app.command("plan")
 def generate_plan_command(
     project_id: str = typer.Argument(..., help="案件ID（UUID v4）"),
     prompt: str = typer.Option(..., "--prompt", help="今回の生成指示"),
-    reference_ids: list[str] = typer.Option([], "--reference", help="送信する参照ID（複数指定可）"),
-    count: int | None = typer.Option(None, "--count", min=1, max=10, help="候補数（1〜10）"),
-    model: Literal["gpt-image-2"] | None = typer.Option(None, "--model", help="生成モデル"),
-    size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] | None = typer.Option(
-        None, "--size", help="画像サイズ"
-    ),
-    quality: Literal["low", "medium", "high"] | None = typer.Option(
-        None, "--quality", help="生成品質"
-    ),
-    output_format: Literal["png", "jpeg", "webp"] | None = typer.Option(
-        None, "--format", help="出力形式"
-    ),
+    reference_ids: list[str] = typer.Option([], "--reference", help="使用する参照ID（複数指定可）"),
+    count: int | None = typer.Option(None, "--count", min=1, max=10, help="希望枚数の目安（1〜10）"),
 ) -> None:
-    """APIを呼ばず、固定スナップショットの新規生成計画を保存します。"""
+    """Codex会話用の固定スナップショットを保存します。画像生成は行いません。"""
     try:
         generation = plan_generate(
             project_id,
             prompt=prompt,
             reference_ids=reference_ids,
             count=count,
-            model=model,
-            size=size,
-            quality=quality,
-            output_format=output_format,
         )
     except GenerationPlanError as exc:
         console.print(f"[red]計画を作成できません:[/red] {exc}")
@@ -821,7 +876,7 @@ def generate_plan_command(
         console.print(f"[red]計画を保存できませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
     _show_generation(generation)
-    console.print("計画を保存しました。APIは呼び出していません。")
+    console.print("計画を保存しました。Codex会話で内容を確認してから画像を生成してください。")
 
 
 @generate_app.command("show")
@@ -841,46 +896,13 @@ def generate_show_command(generation_id: str = typer.Argument(..., help="実験I
     _show_generation(generation)
 
 
-@generate_app.command("run")
-def generate_run_command(generation_id: str = typer.Argument(..., help="実験ID（UUID v4）")) -> None:
-    """プレビューと明示承認の後に新規生成を実行します。"""
-    _run_generation_command(generation_id)
-
-
-@generate_app.command("retry")
-def generate_retry_command(
-    generation_id: str = typer.Argument(..., help="再試行元の実験ID（UUID v4）"),
-    failed_only: bool = typer.Option(..., "--failed-only", help="明確に失敗した枠のみ対象にする"),
+@generate_app.command("register")
+def generate_register_command(
+    generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+    image_paths: list[Path] = typer.Argument(..., help="Codex会話から保存した画像ファイル"),
 ) -> None:
-    """明確に失敗した枠のみを新しい計画として再試行します。"""
-    if not failed_only:
-        console.print("[red]仕様上、--failed-only を必ず指定してください。[/red]")
-        raise typer.Exit(code=2)
-    try:
-        source, _ = get_generation(generation_id)
-        if any(item.get("outcome") == "unknown" for item in source.errors):
-            console.print(
-                "[yellow]元実験には結果不明の枠があります。重複課金の可能性があるため、"
-                "その枠は再送しません。[/yellow]"
-            )
-        generation = plan_retry_failed_slots(source.id)
-    except GenerationPlanError as exc:
-        console.print(f"[red]再試行計画を作成できません:[/red] {exc}")
-        raise typer.Exit(code=4) from exc
-    except ValueError as exc:
-        console.print(f"[red]実験IDが不正です:[/red] {exc}")
-        raise typer.Exit(code=2) from exc
-    except LookupError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=4) from exc
-    except (OSError, StorageError) as exc:
-        console.print(f"[red]再試行計画を保存できませんでした:[/red] {exc}")
-        raise typer.Exit(code=6) from exc
-    _show_generation(generation)
-    console.print(
-        f"新しい再試行計画を保存しました: {generation.id}。"
-        "送信枠を確認し、generate runで個別に承認してください。APIは呼び出していません。"
-    )
+    """画像を検証して生成候補として登録します。"""
+    _register_generation_command(generation_id, image_paths)
 
 
 @report_app.command("show")
@@ -932,36 +954,18 @@ def report_open_command(generation_id: str = typer.Argument(..., help="実験ID�
 def edit_plan_command(
     project_id: str = typer.Argument(..., help="案件ID（UUID v4）"),
     source_candidate_id: str = typer.Option(..., "--source", help="編集元候補ID（UUID v4）"),
-    mode: Literal["whole", "masked"] = typer.Option(..., "--mode", help="編集方式"),
     prompt: str = typer.Option(..., "--prompt", help="今回の編集指示"),
-    mask_path: Path | None = typer.Option(None, "--mask", help="masked編集用PNGマスク"),
     reference_ids: list[str] = typer.Option([], "--reference", help="送信する追加参照ID（複数指定可）"),
-    count: int | None = typer.Option(None, "--count", min=1, max=10, help="候補数（1〜10）"),
-    model: Literal["gpt-image-2"] | None = typer.Option(None, "--model", help="生成モデル"),
-    size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] | None = typer.Option(
-        None, "--size", help="画像サイズ"
-    ),
-    quality: Literal["low", "medium", "high"] | None = typer.Option(
-        None, "--quality", help="生成品質"
-    ),
-    output_format: Literal["png", "jpeg", "webp"] | None = typer.Option(
-        None, "--format", help="出力形式"
-    ),
+    count: int | None = typer.Option(None, "--count", min=1, max=10, help="希望枚数の目安（1〜10）"),
 ) -> None:
-    """APIを呼ばず、候補編集計画を保存します。"""
+    """Codex会話用の候補編集計画を保存します。画像生成は行いません。"""
     try:
         generation = plan_edit(
             project_id,
             source_candidate_id=source_candidate_id,
-            mode=mode,
             prompt=prompt,
-            mask_path=mask_path,
             reference_ids=reference_ids,
             count=count,
-            model=model,
-            size=size,
-            quality=quality,
-            output_format=output_format,
         )
     except GenerationPlanError as exc:
         console.print(f"[red]編集計画を作成できません:[/red] {exc}")
@@ -979,13 +983,22 @@ def edit_plan_command(
         console.print(f"[red]編集計画を保存できませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
     _show_generation(generation)
-    console.print("編集計画を保存しました。APIは呼び出していません。")
+    console.print("編集計画を保存しました。Codex会話で内容を確認してから画像を編集してください。")
 
 
-@edit_app.command("run")
-def edit_run_command(generation_id: str = typer.Argument(..., help="実験ID（UUID v4）")) -> None:
-    """プレビューと明示承認の後に候補編集を実行します。"""
-    _run_generation_command(generation_id)
+@edit_app.command("show")
+def edit_show_command(generation_id: str = typer.Argument(..., help="実験ID（UUID v4）")) -> None:
+    """編集計画と実験結果を表示します。"""
+    generate_show_command(generation_id)
+
+
+@edit_app.command("register")
+def edit_register_command(
+    generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+    image_paths: list[Path] = typer.Argument(..., help="Codex会話から保存した編集画像ファイル"),
+) -> None:
+    """編集した画像を検証して候補として登録します。"""
+    _register_generation_command(generation_id, image_paths)
 
 
 @candidate_app.command("list")
@@ -1281,10 +1294,13 @@ def status_show(project_id: str | None = typer.Argument(None, help="案件ID（�
 
         project = get_project(project_id)
         root = project_root(project.id)
-        generations = [
-            read_model(path, Generation)
-            for path in sorted((root / "generations").glob("*/generation.json"))
-        ]
+        generations = sorted(
+            (
+                read_model(path, Generation)
+                for path in (root / "generations").glob("*/generation.json")
+            ),
+            key=lambda item: (item.created_at, str(item.id)),
+        )
         candidates = [
             read_model(path, Candidate)
             for path in sorted((root / "candidates").glob("*.json"))
@@ -1307,7 +1323,7 @@ def status_show(project_id: str | None = typer.Argument(None, help="案件ID（�
     table.add_row("採用版候補ID", str(project.approved_candidate_id or "未設定"))
     active_generations = [
         item for item in generations
-        if item.status in {"draft", "awaiting_approval", "running"}
+        if item.status in {"draft", "awaiting_approval", "running", "result_unknown"}
     ]
     table.add_row(
         "進行中・未確認の実験",
@@ -1322,11 +1338,15 @@ def status_show(project_id: str | None = typer.Argument(None, help="案件ID（�
         next_action = "アーカイブ済みのため読み取りのみ可能です。"
     elif active_generations:
         current = active_generations[-1]
+        command = "generate" if current.operation == "generate" else "edit"
         next_action = {
-            "draft": f"計画を確認して実行承認してください: iwb generate show {current.id}",
-            "awaiting_approval": f"プレビューを確認し、承認後に対応するrunを実行してください: {current.id}",
-            "running": f"実験の完了状態を確認してください: iwb generate show {current.id}",
+            "draft": f"計画を提示し、承認待ちを記録してください: iwb {command} request-approval {current.id}",
+            "awaiting_approval": f"明示承認後に承認を記録してください: iwb {command} approve {current.id}",
+            "running": f"会話結果を確認し、画像を登録または状態を記録してください: iwb {command} show {current.id}",
+            "result_unknown": f"確認するまで再生成しないでください: iwb {command} show {current.id}",
         }[current.status]
+    elif generations and generations[-1].status == "blocked":
+        next_action = "利用上限回復を確認し、利用者が新しい計画を依頼した場合にだけ再開してください。"
     elif pending_review:
         next_action = f"候補を比較してレビューしてください: iwb review {pending_review[0].id}"
     elif generations and generations[-1].status in {"failed", "partially_succeeded"}:

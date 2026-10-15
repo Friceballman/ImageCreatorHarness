@@ -131,9 +131,9 @@ def archive_project(project_id: str | UUID, *, projects_dir: Path | None = None)
             raise ProjectStateConflict("アーカイブ済み案件です。")
         for generation_path in (root / "generations").glob("*/generation.json"):
             generation = read_model(generation_path, Generation)
-            if generation.status == "running":
+            if generation.status in {"running", "result_unknown"}:
                 raise ProjectStateConflict(
-                    f"実行中の実験があるためアーカイブできません: {generation.id}"
+                    f"結果未確定の実験があるためアーカイブできません: {generation.id}"
                 )
         archived = Project.model_validate(
             {
