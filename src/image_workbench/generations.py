@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import shutil
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -39,6 +38,7 @@ from image_workbench.storage import (
     atomic_copy_file,
     atomic_write_bytes,
     atomic_write_model,
+    create_staging_directory,
     read_model,
     safe_project_path,
     sha256_file,
@@ -298,7 +298,7 @@ def _create_plan(
             final_dir = generations_root / str(generation_id)
             if final_dir.exists():
                 continue
-            temp_dir = Path(tempfile.mkdtemp(prefix=".iwb-plan-", dir=generations_root))
+            temp_dir = create_staging_directory(generations_root, prefix=".iwb-plan-")
             try:
                 (temp_dir / "events").mkdir()
                 (temp_dir / "outputs").mkdir()

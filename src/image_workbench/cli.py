@@ -11,6 +11,8 @@ from rich.table import Table
 from typing import Literal
 
 from image_workbench.config import ConfigError, ResolvedConfig, load_config
+from image_workbench.exports import export_selected_candidates, selected_candidates
+from image_workbench.ids import parse_uuid4
 from image_workbench.projects import (
     archive_project,
     create_project,
@@ -315,6 +317,58 @@ def project_set_approved_command(
         raise typer.Exit(code=6) from exc
     console.print(f"案件の採用版を更新しました: {updated.approved_candidate_id}")
     _refresh_candidate_report(candidate_id)
+
+
+@project_app.command("export")
+def project_export_command(
+    project_id: str = typer.Argument(..., help="出力対象の案件ID（UUID v4）"),
+) -> None:
+    """指定案件のselected候補すべてをexports/へ出力します（ver4.1）。"""
+    try:
+        normalized_id = parse_uuid4(project_id)
+    except ValueError as exc:
+        console.print(f"[red]案件IDが不正です:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    try:
+        project = get_project(normalized_id)
+        candidates = selected_candidates(project.id)
+        if not candidates:
+            console.print("selected候補は0件です。出力ファイルは作成しませんでした。")
+            return
+        console.print(f"対象案件: {project.name} ({project.id})")
+        console.print(f"出力対象: selected候補 {len(candidates)}件")
+        for candidate in candidates:
+            console.print(f"  {candidate.id} / {candidate.width}×{candidate.height}")
+        console.print(f"出力先: {project_root(project.id) / 'exports'} / 新しい出力ID")
+        if not typer.confirm("これらの画像を出力しますか？", default=False):
+            console.print("画像の出力を中止しました。")
+            raise typer.Exit(code=130)
+        record = export_selected_candidates(project.id, expected_candidates=candidates)
+    except ConfigError as exc:
+        console.print(f"[red]設定エラー:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    except ProjectStateConflict as exc:
+        console.print(f"[red]画像を出力できません:[/red] {exc}")
+        raise typer.Exit(code=4) from exc
+    except LockConflict as exc:
+        console.print(f"[red]案件が使用中です:[/red] {exc}")
+        raise typer.Exit(code=4) from exc
+    except LookupError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=4) from exc
+    except ValueError as exc:
+        console.print(f"[red]入力または画像の検証に失敗しました:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    except OSError as exc:
+        console.print(
+            f"[red]画像を出力できませんでした:[/red] {exc}。"
+            "元画像と過去の出力は保持しています。保存先を確認して再実行してください。"
+        )
+        raise typer.Exit(code=6) from exc
+    if record is not None:
+        output = project_root(record.project_id) / "exports" / str(record.id)
+        console.print(f"画像を出力しました: {len(record.images)}件 / {output}")
+        console.print(f"画像一覧: {output / 'manifest.json'}")
 
 
 @requirement_app.command("add")

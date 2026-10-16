@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -18,7 +17,13 @@ from image_workbench.models import (
     ReferenceIndex,
     RequirementStore,
 )
-from image_workbench.storage import ProjectLock, StorageError, atomic_write_model, read_model
+from image_workbench.storage import (
+    ProjectLock,
+    StorageError,
+    atomic_write_model,
+    create_staging_directory,
+    read_model,
+)
 
 
 _PROJECT_SLUG = re.compile(r"^project-[0-9a-f]{8}$")
@@ -66,7 +71,7 @@ def create_project(name: str, goal: str, *, projects_dir: Path | None = None) ->
         if destination.exists():
             continue
 
-        temporary_root = Path(tempfile.mkdtemp(prefix=".iwb-create-", dir=root))
+        temporary_root = create_staging_directory(root, prefix=".iwb-create-")
         try:
             (temporary_root / "references").mkdir()
             (temporary_root / "generations").mkdir()

@@ -10,6 +10,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TypeVar
+from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
@@ -25,6 +26,23 @@ class StorageError(OSError):
 
 class LockConflict(StorageError):
     """案件ロックを取得できなかった。"""
+
+
+def create_staging_directory(parent: Path, *, prefix: str) -> Path:
+    """確定前の作業領域を作る。Windowsでは親のアクセス権を継承する。"""
+    if os.name != "nt":
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+
+    # mkdtempのmode=0o700はWindowsでACL継承を無効にする。
+    # UUIDと排他的mkdirで衝突を避け、サンドボックス用の権限も継承する。
+    for _ in range(128):
+        directory = parent / f"{prefix}{uuid4().hex}"
+        try:
+            directory.mkdir()
+        except FileExistsError:
+            continue
+        return directory
+    raise FileExistsError("一時フォルダーの一意な名前を確保できませんでした。")
 
 
 def safe_project_path(project_root: Path, relative_posix_path: str) -> Path:
