@@ -16,6 +16,7 @@ from image_workbench.models import (
     Candidate, DataModel, Project, ProjectRelativePath, Record, UTCDateTime,
 )
 from image_workbench.evaluation import list_candidates
+from image_workbench.ids import parse_uuid4
 from image_workbench.projects import ProjectStateConflict, get_project, project_root
 from image_workbench.storage import (
     ProjectLock, StorageError, atomic_copy_file, atomic_write_model,
@@ -49,6 +50,49 @@ _FORMATS = {
 }
 
 
+class ExportNameError(ValueError):
+    """出力名がWindowsで安全に使用できない。"""
+
+
+def validate_export_name(name: str) -> None:
+    """基本名を変更せず検証する。パスや予約デバイス名は受け付けない。"""
+    if not name.strip() or name.endswith((" ", ".")) or name[-1].isspace():
+        raise ExportNameError("出力名は空白だけにせず、末尾の空白・ピリオドを除いて指定してください。")
+    if any(char in '<>:"/\\|?*' or ord(char) < 32 or ord(char) == 127 for char in name):
+        raise ExportNameError("出力名にパス区切り・禁止文字・制御文字は使用できません。基本名だけを指定してください。")
+    device = name.split(".", 1)[0].rstrip(" ").upper()
+    reserved = {"CON", "PRN", "AUX", "NUL"} | {
+        f"{prefix}{number}" for prefix in ("COM", "LPT") for number in "123456789¹²³"
+    }
+    if device in reserved:
+        raise ExportNameError("Windowsの予約デバイス名は使用できません。別の出力名を指定してください。")
+    _validate_filename_length(name)
+
+
+def _validate_filename_length(filename: str) -> None:
+    try:
+        length = len(filename.encode("utf-16-le")) // 2
+    except UnicodeEncodeError as exc:
+        raise ExportNameError("出力名に不正なUnicode文字が含まれます。別の名前を指定してください。") from exc
+    if length > 255:
+        raise ExportNameError("連番・拡張子を含む出力名は255 UTF-16コード単位以内に短くしてください。")
+
+
+def export_filenames(candidates: list[Candidate], name: str | None = None) -> list[str]:
+    """確認画面と保存で共通の命名を使う。候補の順序は呼出元が固定する。"""
+    if name is not None:
+        validate_export_name(name)
+    filenames = []
+    for index, candidate in enumerate(candidates, 1):
+        stem = str(candidate.id) if name is None else name
+        if name is not None and len(candidates) > 1:
+            stem = f"{name}_{index:03d}"
+        filename = stem + _FORMATS[candidate.mime_type][1]
+        _validate_filename_length(filename)
+        filenames.append(filename)
+    return filenames
+
+
 def selected_candidates(
     project_id: str | UUID, *, projects_dir: Path | None = None,
 ) -> list[Candidate]:
@@ -71,9 +115,13 @@ def selected_candidates(
 
 def export_selected_candidates(
     project_id: str | UUID, *, expected_candidates: list[Candidate] | None = None,
+    name: str | None = None, export_id: UUID | None = None,
     projects_dir: Path | None = None,
 ) -> ExportRecord | None:
     """確認済みのselected候補すべてを案件ロック下で再検証して出力する。"""
+    if name is not None:
+        validate_export_name(name)
+    identifier = parse_uuid4(export_id) if export_id is not None else uuid4()
     root = project_root(project_id, projects_dir=projects_dir)
     with ProjectLock(root):
         project = get_project(project_id, projects_dir=projects_dir)
@@ -82,7 +130,7 @@ def export_selected_candidates(
             raise ProjectStateConflict("確認後に候補が変更されました。対象を再確認して出力し直してください。")
         if not candidates:
             return None
-        return _publish_export(root, project, candidates)
+        return _publish_export(root, project, candidates, name=name, export_id=identifier)
 
 
 def _verify_image(path: Path, candidate: Candidate) -> None:
@@ -103,8 +151,12 @@ def _verify_image(path: Path, candidate: Candidate) -> None:
         raise ValueError(f"候補画像のSHA-256が記録と一致しません: {candidate.id}")
 
 
-def _publish_export(root: Path, project: Project, candidates: list[Candidate]) -> ExportRecord:
+def _publish_export(
+    root: Path, project: Project, candidates: list[Candidate], *,
+    name: str | None = None, export_id: UUID | None = None,
+) -> ExportRecord:
     """呼出元の案件ロック下で、全画像と一覧を検証してからまとめて公開する。"""
+    filenames = export_filenames(candidates, name)
     sources = []
     for candidate in candidates:
         source = safe_project_path(root, candidate.file)
@@ -112,14 +164,13 @@ def _publish_export(root: Path, project: Project, candidates: list[Candidate]) -
         sources.append(source)
     exports_root = safe_project_path(root, "exports")
     exports_root.mkdir(exist_ok=True)
-    export_id = uuid4()
+    export_id = parse_uuid4(export_id) if export_id is not None else uuid4()
     relative_root = f"exports/{export_id}"
     destination = safe_project_path(root, relative_root)
     temporary = create_staging_directory(exports_root, prefix=".iwb-export-")
     try:
         images = []
-        for candidate, source in zip(candidates, sources, strict=True):
-            filename = f"{candidate.id}{_FORMATS[candidate.mime_type][1]}"
+        for candidate, source, filename in zip(candidates, sources, filenames, strict=True):
             copied = temporary / filename
             digest = atomic_copy_file(source, copied)
             if digest != candidate.sha256:

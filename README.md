@@ -94,6 +94,23 @@ iwb cache clear <cache-id>       # 指定した一覧キャッシュだけ
 
 変更点のみを記載した[Notion仕様書 ver4.2](https://app.notion.com/p/3fcf252ab68381abb8eed67a27a47e71)とver4.1を併せて適用します。案件データの形式変更・移行は不要です。
 
+## 選択画像の名前付けと出力（ver4.3）
+
+出力したい画像をそれぞれ `selected` にしてから、拡張子を含めない共通名を指定します。各操作の対象と確認内容を読み、意図した操作なら `y` と答えてください。
+
+```powershell
+iwb candidate select <candidate-id> --reason "成果物に含めるため"
+# 複数枚なら、出力したい候補ごとにselectを実行
+iwb candidate list <project-id> --terminal
+iwb project export <project-id> --name "ロボット立ち絵"
+```
+
+対象は案件のselectedすべてです。1枚なら `ロボット立ち絵.png`、2枚以上なら `ロボット立ち絵_001.png`、`ロボット立ち絵_002.png` のようになります。連番は候補IDの昇順で割り当て、元の画像形式を維持します。実行前に候補IDと出力名の対応・保存先を表示します。
+
+保存先は `exports/<新しい出力ID>/`。元画像と過去の出力は保持します。`--name` 省略時は従来の候補UUID名です。Windowsの禁止文字・予約名・末尾の空白やピリオド等は拒否し、連番と拡張子を含む名前は255 UTF-16コード単位以内です。案件の代表となる採用版の `set-approved` は別操作で、出力の前提ではありません。
+
+詳細な流れは[操作マニュアル](docs/operation-manual.md)の10.3と12.4、差分は[Notion仕様書ver4.3](https://app.notion.com/p/3fcf252ab6838108acf0dc0b7fd1d8fa)を参照してください。データ形式の変更・移行は不要です。
+
 ## 実装状況
 
 ver3向けのローカル管理基盤が存在しますが、Codex会話連携とver4の受け入れ条件への適合は作業中です。未実装の機能を完成済みとは扱いません。実際の画像生成を試す場合は、対象生成計画、入力画像、利用枠の状態を会話で確認し、個別に承認します。

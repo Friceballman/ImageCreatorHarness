@@ -1,8 +1,8 @@
-# はじめての操作マニュアル — 画像の取り込みから生成・採用・ログ確認まで
+# はじめての操作マニュアル — 画像の取り込みから生成・選択・名前付け・出力まで
 
-作成日：2026-10-16。対象：Windows / PowerShell、Python 3.12以上、Image Workbench 0.1.0。
+作成日：2026-10-16。更新日：2026-10-17（ver4.3）。対象：Windows / PowerShell、Python 3.12以上、Image Workbench 0.1.0。
 
-仕様の基準は[仕様書 ver4.1（Codex会話環境版）](https://app.notion.com/p/3f4f252ab68381e8bc40dc251b3ca08c)と[ver4.2変更点仕様](https://app.notion.com/p/3fcf252ab68381abb8eed67a27a47e71)。このマニュアルは、同仕様と `src/image_workbench/` の実装を照合して作成した操作案内です。実際の画像生成を含む一連の動作の合格報告ではありません。
+仕様の基準は[仕様書 ver4.1（Codex会話環境版）](https://app.notion.com/p/3f4f252ab68381e8bc40dc251b3ca08c)、[ver4.2変更点仕様](https://app.notion.com/p/3fcf252ab68381abb8eed67a27a47e71)、[ver4.3変更点仕様](https://app.notion.com/p/3fcf252ab6838108acf0dc0b7fd1d8fa)。このマニュアルは、同仕様と `src/image_workbench/` の実装を照合して作成した操作案内です。実際の画像生成を含む一連の動作の合格報告ではありません。
 
 ## 1. このハーネスで何をするのか
 
@@ -20,8 +20,12 @@ flowchart TD
   F -->|修正| D
   F -->|承認| G["⑥ 承認を記録<br>Codex会話で画像生成"]
   G --> H["⑦ 出力をファイルで受け取る<br>iwbで候補登録"]
-  H --> I["⑧ 比較・レビュー<br>選択・保留・却下"]
-  I --> J["⑨ 別操作で最終採用<br>レポート・保存先を確認"]
+  H --> I["⑧ 比較・レビュー"]
+  I --> J["⑨ 出力したい候補ごとにcandidate select<br>selectedに登録（複数可）"]
+  J --> K["⑩ project export --nameで名前を指定<br>1枚は名前のみ・2枚以上は連番"]
+  K --> L["⑪ 候補ID・出力名・保存先を確認<br>yで出力を実行"]
+  L --> M["⑫ exports/出力ID/の画像と<br>manifest.jsonを確認"]
+  J --> N["必要な場合だけset-approved<br>案件の代表となる採用版1件を別途設定"]
   I -->|修正したい| D
 ```
 
@@ -353,7 +357,7 @@ iwb generate register $GenerationId '.\handoff\result-01.png' '.\handoff\result-
 
 **実装上の注意：** 現在の `actual_output_count` はregisterへ渡して検証された画像ファイル数から記録されます。会話に出たがローカルへ渡せなかった画像を自動計数する機能はありません。未受領画像がある場合はCodexに明示し、画面の枚数だけで「全件保存済み」と判断しないでください。
 
-## 10. 候補を見て、レビューし、最終採用する
+## 10. 候補を見て、レビューし、出力対象をselectedに登録する
 
 ### 10.1 開く・比較する
 
@@ -391,24 +395,42 @@ iwb review $CandidateId
 
 生成計画作成後に案件要件を変更している場合、レビューの対象は現在の有効要件です。生成時の条件と比較するには、生成計画の要件スナップショットも確認してください。
 
-### 10.3 候補の評価と案件の最終採用を分ける
+### 10.3 出力したい画像をselectedに登録する（複数可）
+
+画像の生成・候補登録・レビューだけでは、成果物の出力対象にはなりません。出力したい候補ごとに `candidate select` を実行します。
 
 ```powershell
 iwb candidate select $CandidateId --reason '形状と配色が要件を満たすため'
-iwb project set-approved $ProjectId $CandidateId
-iwb project show $ProjectId
 ```
 
-それぞれ表示される対象と確認内容を読み、意図した操作なら `y` と答えます。`select` は候補を `selected` にするだけです。`set-approved` で、その案件の採用版を最大1件設定します。複数のselected候補は持てますが、最終採用版は1件です。
+表示された候補IDと理由を確認し、意図した画像なら `y` と答えます。状態が `selected` になり、後の `project export` の対象になります。2枚出力する場合は、2枚目も別に登録します。
 
-未レビューのselected候補を採用する場合は、警告、追加の明示確認、理由入力があります。通常はレビューを済ませてから採用してください。
+```powershell
+$OtherCandidateId = '出力したい2枚目の候補ID'
+iwb candidate select $OtherCandidateId --reason '別構図も成果物に含めるため'
+# 案件内の全候補を表示し、selectedになっている画像を確認
+iwb candidate list $ProjectId --terminal
+```
 
-保留・却下にする場合は、selectの代わりに次を使います。画像は削除されません。
+**出力対象は、その案件のselectedすべてです。** 過去に選んだ画像も含まれるので、出力前に案件全体の一覧を確認してください。今回の出力から外したい候補は、理由を付けて保留・却下にします。元画像は削除されません。
 
 ```powershell
 iwb candidate hold $CandidateId --reason '他候補と比較してから決めるため'
 iwb candidate reject $CandidateId --reason '手の形状が条件を満たさないため'
 ```
+
+次は **12.4の「名前付け → 確認 → 出力」** へ進みます。修正が必要なら先に11節で新しい候補を作ります。
+
+### 10.4 案件の代表となる採用版を設定する（必要な場合だけ）
+
+`selected` は複数持てますが、案件の採用版 `approved_candidate_id` は最大1件です。代表画像を記録したい場合だけ、次を実行します。名前付きの一括出力にこの設定は必要ありません。
+
+```powershell
+iwb project set-approved $ProjectId $CandidateId
+iwb project show $ProjectId
+```
+
+対象と確認内容を読み、意図した操作なら `y` と答えます。未レビューのselected候補を採用する場合は、警告、追加の明示確認、理由入力があります。採用版の設定だけでは画像は出力されません。
 
 ## 11. 修正したい場合は新しい編集用の生成計画を作る
 
@@ -475,7 +497,8 @@ projects/
    ├─ reports/生成計画ID.md                    ← 人が読む生成計画レポート
    ├─ reports/生成計画ID.json                  ← 構造化された生成計画レポート
    └─ exports/出力ID/                     ← project exportでselected候補をコピー
-      ├─ 候補ID.png                       ← 元の形式の画像（JPEG/WebPも対応）
+      ├─ ロボット立ち絵_001.png           ← --name指定時。1枚なら連番なし
+      ├─ ロボット立ち絵_002.png           ← --name省略時は候補ID名
       └─ manifest.json                    ← 出力時点の画像一覧・元画像・hash
 ```
 
@@ -488,6 +511,8 @@ flowchart LR
   D -->|registerで検証・コピー| E["generations/生成計画ID/outputs/<br>正式な候補画像"]
   F["candidates/候補ID.json"] -->|fileで参照| E
   G["project.json<br>採用候補ID"] --> F
+  F -->|candidate select| J["selectedの候補すべて"]
+  J -->|project export --name| K["exports/出力ID/<br>名前付きの画像とmanifest.json"]
   H["events/・reviews/・generation.json"] --> I["reports/<br>Markdown・JSON"]
 ```
 
@@ -510,31 +535,50 @@ Get-ChildItem -LiteralPath (Join-Path $GenerationRoot 'events') -Filter '*.json'
 
 要件履歴は `iwb requirement history $ProjectId`、参照メタデータの履歴は `references/reference-index.json`、候補状態履歴は `candidates/候補ID.json`、レビュー本文は `reviews/レビューID.json` またはレポートで確認します。JSONは閲覧用として扱い、運用データを手動編集しないでください。
 
-### 12.4 成果画像を取り出す
+### 12.4 selectedの画像に名前を付けて出力する（ver4.3）
 
-ver4.1では次のコマンドでselected候補をまとめて出力できます。
+**① 出力対象を確認する。** 10.3で `candidate select` を実行した画像が対象です。生成計画を指定せず、案件全体の一覧で `selected` を確認します。
+
+```powershell
+iwb candidate list $ProjectId --terminal
+```
+
+**② 拡張子を含めず、共通の名前を指定する。** 日本語や途中の空白も使えます。
+
+```powershell
+iwb project export $ProjectId --name 'ロボット立ち絵'
+```
+
+| selectedの件数 | 出力名の例 |
+| --- | --- |
+| 0件 | 出力しない。先に10.3でselectする |
+| 1件 | `ロボット立ち絵.png`（連番なし） |
+| 2件以上 | `ロボット立ち絵_001.png`、`ロボット立ち絵_002.png`… |
+
+番号は候補IDの昇順に1から割り当てます。選択した順ではありません。PNG・JPEG・WebPそれぞれ元の形式と拡張子を保ち、形式が混ざっても共通の連番を使います。
+
+**③ 候補IDと出力名の対応・件数・保存先を読み、正しければ `y` と答える。** 名前を変えたい場合は `n` で取り消し、別の `--name` で実行し直します。確認後に対象が変わった場合も停止するので、一覧から確認し直してください。
+
+**④ 完了メッセージの出力先を開き、画像とmanifestを確認する。** 保存先は案件内の `exports/<export-id>/` です。例えばselectedが2件なら次のようになります。
+
+```text
+projects/project-xxxxxxxx/exports/今回の出力ID/
+├─ ロボット立ち絵_001.png
+├─ ロボット立ち絵_002.png
+└─ manifest.json
+```
+
+`manifest.json` で出力名から元の候補ID・生成計画ID・画像パス・SHA-256・形式・寸法を追えます。同じ名前で再実行しても、新しい出力IDのフォルダーに保存され、以前の出力は残ります。
+
+名前にパス・禁止文字（`< > : " / \ | ? *`）・制御文字・末尾の空白やピリオド・Windows予約名（CON、NUL等）は使えません。連番と拡張子を含め255 UTF-16コード単位以内にしてください。名前が不正なら理由を表示して停止します。自動の置換・短縮はしません。
+
+名前を付けず、従来どおり候補ID名で出力したい場合：
 
 ```powershell
 iwb project export $ProjectId
 ```
 
-表示された案件・候補ID・件数を確認して許可すると、その案件で `selected` になっている候補をすべて `exports/<export-id>/` にコピーします。`approved_candidate_id` の採用版だけに限定しません。未選択・却下・保留の候補は含めず、画像の再生成・変換や採用状態の変更も行いません。
-
-画像と同じフォルダーの `manifest.json` に、案件ID、出力日時、候補ID、生成計画ID、元画像と出力画像の案件相対パス、SHA-256、形式・寸法を記録します。再実行しても過去の出力は残り、新しい出力IDで別フォルダーに保存します。出力後に選択状態を変更しても、過去の出力は自動更新されません。
-
-selected候補が0件なら、出力を作らず正常終了します。確認後に候補が変わった場合は対象を再確認してください。アーカイブ済み案件・残存ロック・破損画像等では停止し、不完全な出力を公開しません。元画像や過去の出力を保持したまま、原因を解消して再実行してください。採用版の設定だけでは自動出力しません。
-
-PowerShellでコピーする場合の例です。
-
-```powershell
-# candidate showの「画像」をそのまま入れる
-$ImageRelativePath = 'generations/実際の生成計画ID/outputs/実際の候補ID.png'
-$ImagePath = Join-Path $ProjectRoot $ImageRelativePath
-# 未使用の出力名を指定する。既存ファイルがあれば上書きせず停止する
-[System.IO.File]::Copy($ImagePath, 'C:\Delivery\robot-final-01.png', $false)
-```
-
-コピー先フォルダは事前に用意してください。採用前の候補も同じ方法で取り出せます。
+出力はselectedすべてが対象で、`set-approved` の有無では変わりません。未選択・却下・保留の候補は含みません。元画像の名前・候補状態・採用版は変更せず、画像の再生成・変換も行いません。アーカイブ済み案件・残存ロック・破損画像等では停止し、不完全な出力を公開しません。出力後に選択状態を変えても過去の出力には反映しません。
 
 ## 13. 停止・エラー時の読み方
 
@@ -618,15 +662,17 @@ iwb project archive $ProjectId
 - [ ] 正式なoutputsの画像を開き、reviewを保存できる。
 - [ ] selectだけでは最終採用にならず、set-approvedで採用版が変わる。
 - [ ] reportとイベントから、承認・登録・レビュー等の経過を追える。
-- [ ] 採用候補の画像パスを特定し、原本を残して成果画像をコピーできる。
+- [ ] 出力したい候補をそれぞれselectし、案件一覧でselectedを確認できる。
+- [ ] project export --nameで候補IDと出力名を確認し、1枚なら連番なし・複数なら連番で出力できる。
+- [ ] 出力先の画像とmanifest.jsonを確認し、再実行しても原本・過去の出力が残る。
 - [ ] 修正は新しい生成計画・候補になり、元の候補が残る。
 
 ## 15. このマニュアルの確認範囲と現時点の制約
 
 仕様書ver4、AGENTS.md、README、config.toml、pyproject.toml、およびCLI・参照登録・要件・生成計画・候補評価・保存・レポートの関連実装を確認しました。Python 3.14.8でモジュール起動、config show、参照追加・生成計画・画像登録・編集用の生成計画・レビューのhelpを実行確認しています。
 
-マニュアル作成中に案件データの登録・変更、画像生成、候補登録、GUI起動、pipインストール、外部画像生成APIの呼び出しは行っていません。API実費はありません。上のチェックリストは利用者が今後行う検証項目であり、合格済みの記録ではありません。
+ver4.3の更新では、試験用データで候補登録→select→名前付き出力、命名・入力検証・失敗時保全を自動テストで確認しています。実案件データの登録・変更、実画像生成、GUI起動、pipインストール、外部画像生成APIの呼び出しは行っていません。API実費はありません。上のチェックリストは利用者が実際の制作環境で確認する項目です。
 
-READMEではver4への適合が作業中とされています。この文書もMVPの完成を保証しません。確認できた主な制約は、自由な複数タグ機能・会話全文保存・生成物の自動取得保証がないこと、実出力数の独立した記録が不十分なこと、register後の追加登録ができないこと、candidate showはレビューID表示が中心でレビュー本文はレポート等で読むこと、終了コード分類に実装上の差があることです。ver4.1で専用exportコマンドを追加しました。その他の制約を今回の変更で解消したとは扱いません。
+READMEではver4への適合が作業中とされています。この文書もMVPの完成を保証しません。確認できた主な制約は、自由な複数タグ機能・会話全文保存・生成物の自動取得保証がないこと、実出力数の独立した記録が不十分なこと、register後の追加登録ができないこと、candidate showはレビューID表示が中心でレビュー本文はレポート等で読むこと、終了コード分類に実装上の差があることです。ver4.1のexportにver4.3で--nameを追加しました。その他の制約を今回の変更で解消したとは扱いません。
 
 ローカルで操作根拠を確認する場合：`src/image_workbench/cli.py`（構文・表示）、`references.py`（画像と役割）、`prompt_builder.py`（指示文）、`generations.py`（生成計画・承認・登録）、`evaluation.py`（レビュー・採用）、`reporting.py`（レポート）、`projects.py` / `config.py`（保存先）を参照してください。

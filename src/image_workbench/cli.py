@@ -10,9 +10,13 @@ import sys
 from rich.console import Console
 from rich.table import Table
 from typing import Literal
+from uuid import uuid4
 
 from image_workbench.config import ConfigError, ResolvedConfig, load_config
-from image_workbench.exports import export_selected_candidates, selected_candidates
+from image_workbench.exports import (
+    ExportNameError, export_filenames, export_selected_candidates, selected_candidates,
+    validate_export_name,
+)
 from image_workbench.ids import parse_uuid4
 from image_workbench.list_view import cache_root, clear_caches, list_caches, show_listing
 from image_workbench.projects import (
@@ -377,28 +381,41 @@ def project_set_approved_command(
 @project_app.command("export")
 def project_export_command(
     project_id: str = typer.Argument(..., help="出力対象の案件ID（UUID v4）"),
+    name: str | None = typer.Option(
+        None, "--name", help="出力の基本名（拡張子なし）。1枚は指定名.png、複数は指定名_001.png等。省略時は候補ID。",
+    ),
 ) -> None:
-    """指定案件のselected候補すべてをexports/へ出力します（ver4.1）。"""
+    """selected候補すべてを出力します。例: --name 'ロボット立ち絵'（ver4.3）。"""
     try:
         normalized_id = parse_uuid4(project_id)
     except ValueError as exc:
         console.print(f"[red]案件IDが不正です:[/red] {exc}")
         raise typer.Exit(code=2) from exc
     try:
+        if name is not None:
+            validate_export_name(name)
         project = get_project(normalized_id)
         candidates = selected_candidates(project.id)
+        filenames = export_filenames(candidates, name)
         if not candidates:
-            console.print("selected候補は0件です。出力ファイルは作成しませんでした。")
+            typer.echo("selected候補は0件です。出力ファイルは作成しませんでした。")
             return
-        console.print(f"対象案件: {project.name} ({project.id})")
-        console.print(f"出力対象: selected候補 {len(candidates)}件")
-        for candidate in candidates:
-            console.print(f"  {candidate.id} / {candidate.width}×{candidate.height}")
-        console.print(f"出力先: {project_root(project.id) / 'exports'} / 新しい出力ID")
+        export_id = uuid4()
+        output = project_root(project.id) / "exports" / str(export_id)
+        typer.echo(f"対象案件: {project.name} ({project.id})")
+        typer.echo(f"出力対象: selected候補 {len(candidates)}件")
+        for candidate, filename in zip(candidates, filenames, strict=True):
+            typer.echo(f"  {candidate.id} → {filename} / {candidate.width}×{candidate.height}")
+        typer.echo(f"出力先: {output}")
         if not typer.confirm("これらの画像を出力しますか？", default=False):
             console.print("画像の出力を中止しました。")
             raise typer.Exit(code=130)
-        record = export_selected_candidates(project.id, expected_candidates=candidates)
+        record = export_selected_candidates(
+            project.id, expected_candidates=candidates, name=name, export_id=export_id,
+        )
+    except ExportNameError as exc:
+        typer.echo(f"出力名が不正です: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
     except ConfigError as exc:
         console.print(f"[red]設定エラー:[/red] {exc}")
         raise typer.Exit(code=3) from exc
@@ -422,8 +439,8 @@ def project_export_command(
         raise typer.Exit(code=6) from exc
     if record is not None:
         output = project_root(record.project_id) / "exports" / str(record.id)
-        console.print(f"画像を出力しました: {len(record.images)}件 / {output}")
-        console.print(f"画像一覧: {output / 'manifest.json'}")
+        typer.echo(f"画像を出力しました: {len(record.images)}件 / {output}")
+        typer.echo(f"画像一覧: {output / 'manifest.json'}")
 
 
 @requirement_app.command("add")

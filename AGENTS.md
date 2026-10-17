@@ -2,12 +2,14 @@
 
 ## 1. 仕様と対象
 
-- 唯一の機能・データ・CLI・受け入れ基準は[Notionの仕様書 ver4.1（Codex会話環境版）](https://app.notion.com/p/3f4f252ab68381e8bc40dc251b3ca08c)と[ver4.2変更点仕様](https://app.notion.com/p/3fcf252ab68381abb8eed67a27a47e71)。ver4本文と第14節のver4.1追補を基準とし、ver4.2の差分は新仕様を優先する。ver1〜ver3や旧READMEとの矛盾は本仕様を優先する。ルートのver3 PDFは履歴資料。
+- 唯一の機能・データ・CLI・受け入れ基準は[Notionの仕様書 ver4.1（Codex会話環境版）](https://app.notion.com/p/3f4f252ab68381e8bc40dc251b3ca08c)、[ver4.2変更点仕様](https://app.notion.com/p/3fcf252ab68381abb8eed67a27a47e71)、[ver4.3変更点仕様](https://app.notion.com/p/3fcf252ab6838108acf0dc0b7fd1d8fa)。ver4本文と第14節のver4.1追補を基準とし、差分は新しい版を優先する。ver1〜ver3や旧READMEとの矛盾は本仕様を優先する。ルートのver3 PDFは履歴資料。
 - 作業前にこのファイルとNotion仕様を読む。`REQUIREMENTS.md` と `ARCHITECTURE.md` はこのリポジトリに存在せず、追加資料として考慮しない。
 - 仕様にない機能や対象外機能を追加しない。仕様変更が必要なら、理由、ver1/ver2構想、データ互換性、受け入れ条件への影響を整理し、ユーザー承認後にNotion仕様と本書を更新する。
 - 対象はPython 3.12以上、Windows主対象の単一ユーザー向けローカルアプリ。操作窓口はCLI `iwb` とCodex会話。サーバー、Web UI、デスクトップGUI、複数ユーザー、クラウド同期、他社生成サービスは対象外。
 - ver4.1の `iwb project export <project-id>` は指定active案件の `selected` 候補すべてを対象とする。採用版 `approved_candidate_id` だけには限定しない。確認後、案件ロック下で対象と画像を再検証し、新規 `exports/<export-id>/` に画像と `manifest.json` を原子的に確定する。0件は出力せず成功、再実行は別ID、元画像・候補状態・採用版・過去の出力は変更しない。既存JSONのschema_versionは1を維持し、データ移行は不要。
 - ver4.2の `project/reference/requirement/candidate/generate list` は対話端末で実行時点の一覧を専用キャッシュへ保存し、VS Codeへ表示を依頼して待機せず戻る。タブやエディタを閉じる操作を要求せず、自動削除しない。`--terminal`・非対話実行・0件ではエディタとキャッシュを作らず、UUIDを省略しないテキストを表示する。`generate list <project-id>` は生成計画（新規生成・編集）を全状態・新しい順に表示し、プロンプト・指定参照スナップショット・Plan hashも示す。`iwb cache clear [<cache-id>]` は個別または全一覧キャッシュを表示・確認後に削除する。表示中のキャッシュも明示削除の対象だが、エディタは終了させない。未知schema・壊れた記録・ID不一致・リンク・想定外のファイルは保持する。キャッシュの編集・削除を案件に反映しない。status/show/history/compareは対象外。
+
+- ver4.3は `iwb project export <project-id> [--name <name>]` で出力名を指定する。selected1枚なら基本名＋拡張子、2枚以上なら基本名＋`_001`からの連番＋拡張子。候補ID昇順で確認・保存の対応を固定し、--name省略時は従来の候補UUID名を維持する。Windowsの禁止文字・予約名・完成名の長さを検証し、不正名は終了コード2。確認前に完全な候補ID・出力名・実際の予定出力先を示す。保存先とmanifest構造はver4.1を維持し、既存データの移行は不要。
 
 ## 2. Codex画像生成と利用枠
 
