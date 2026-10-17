@@ -138,7 +138,7 @@ def archive_project(project_id: str | UUID, *, projects_dir: Path | None = None)
             generation = read_model(generation_path, Generation)
             if generation.status in {"running", "result_unknown"}:
                 raise ProjectStateConflict(
-                    f"結果未確定の実験があるためアーカイブできません: {generation.id}"
+                    f"結果未確定の生成計画があるためアーカイブできません: {generation.id}"
                 )
         archived = Project.model_validate(
             {

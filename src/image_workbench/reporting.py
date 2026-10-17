@@ -46,9 +46,9 @@ def _remaining_work(generation: Generation, candidates: list[Candidate]) -> list
     if generation.status == "blocked":
         return ["利用枠または画像生成機能の状態を確認してください。"]
     if generation.status == "result_unknown":
-        return ["生成結果と利用枠を確認するまで再生成しないでください。確認後、結果に応じて画像登録または新しい計画を作成してください。"]
+        return ["生成結果と利用枠を確認するまで再生成しないでください。確認後、結果に応じて画像登録または新しい生成計画を作成してください。"]
     if generation.status == "draft":
-        return [f"Codex会話で計画を提示し、iwb {command} request-approvalで承認待ちを記録してください。"]
+        return [f"Codex会話で生成計画を提示し、iwb {command} request-approvalで承認待ちを記録してください。"]
     if generation.status == "awaiting_approval":
         return [f"利用者の明示承認を待ち、承認後にiwb {command} approveを記録してください。"]
     if generation.status == "running":
@@ -62,24 +62,24 @@ def _remaining_work(generation: Generation, candidates: list[Candidate]) -> list
 def _next_action(generation: Generation, candidates: list[Candidate]) -> str:
     command = "generate" if generation.operation == "generate" else "edit"
     if generation.status == "blocked":
-        return "利用枠回復後に利用者が新しい計画を依頼した場合のみ再開してください。"
+        return "利用枠回復後に利用者が新しい生成計画を依頼した場合のみ再開してください。"
     if generation.status == "result_unknown":
         return "生成結果を確認して状態を確定してください。自動再生成はしません。"
     if generation.status == "draft":
-        return f"Codex会話で計画を提示し、iwb {command} request-approvalを記録してください。"
+        return f"Codex会話で生成計画を提示し、iwb {command} request-approvalを記録してください。"
     if generation.status == "awaiting_approval":
         return f"利用者の明示承認を待ち、承認後にiwb {command} approveを記録してください。"
     if generation.status == "running":
         return "Codex会話から得られた画像を検証し、iwbで登録してください。"
     if candidates:
         return "候補を比較し、レビューと採用判断を記録してください。"
-    return "生成結果とエラー内容を確認し、必要なら新しい計画を作成してください。"
+    return "生成結果とエラー内容を確認し、必要なら新しい生成計画を作成してください。"
 
 
 def render_markdown(report: Report) -> str:
     generation = report.generation
     lines = [
-        f"# 画像制作実験レポート: {generation.id}",
+        f"# 生成計画レポート: {generation.id}",
         "",
         "## 概要",
         "",

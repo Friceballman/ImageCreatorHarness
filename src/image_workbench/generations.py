@@ -1,4 +1,4 @@
-"""Codex会話用の固定計画、状態記録、画像候補の取り込み。"""
+"""Codex会話用の固定された生成計画、状態記録、画像候補の取り込み。"""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ from image_workbench.storage import (
 
 
 class GenerationPlanError(ValueError):
-    """実行可能な生成・編集計画を作成できない。"""
+    """実行可能な生成計画（新規生成・編集）を作成できない。"""
 
 
 class GenerationExecutionError(RuntimeError):
@@ -197,9 +197,9 @@ def _validate_reference_files(generation: Generation, root: Path) -> None:
 
 
 def verify_plan(generation: Generation, root: Path) -> None:
-    """保存済み計画と参照・編集元ファイルのスナップショットを再検証する。"""
+    """保存済み生成計画と参照・編集元ファイルのスナップショットを再検証する。"""
     if calculate_plan_hash(generation) != generation.plan_hash:
-        raise GenerationPlanError("計画内容が作成後に変更されています。新しい計画を作成してください。")
+        raise GenerationPlanError("生成計画内容が作成後に変更されています。新しい生成計画を作成してください。")
     _validate_reference_files(generation, root)
     if generation.source_candidate_id is not None:
         candidate, image_path = _candidate_for_project(
@@ -209,7 +209,7 @@ def verify_plan(generation: Generation, root: Path) -> None:
         )
         snapshot = generation.source_candidate_snapshot or {}
         if snapshot.get("sha256") != candidate.sha256 or sha256_file(image_path) != snapshot.get("sha256"):
-            raise GenerationPlanError("編集元候補が計画時のスナップショットから変更されています。")
+            raise GenerationPlanError("編集元候補が生成計画時のスナップショットから変更されています。")
 
 
 def _create_plan(
@@ -231,7 +231,7 @@ def _create_plan(
     except LookupError as exc:
         raise GenerationPlanError(str(exc)) from exc
     if project.status != "active":
-        raise GenerationPlanError("アーカイブ済み案件では計画を作成できません。")
+        raise GenerationPlanError("アーカイブ済み案件では生成計画を作成できません。")
 
     requested_count, count_source = _resolved_count(count, config_path=config_path)
     references = _reference_snapshots(project.id, reference_ids or [], projects_dir=projects_dir)
@@ -247,7 +247,7 @@ def _create_plan(
             project.id, source_candidate_id, projects_dir=projects_dir
         )
     if operation == "edit" and source_candidate is None:
-        raise GenerationPlanError("編集計画には編集元候補が必要です。")
+        raise GenerationPlanError("編集用の生成計画には編集元候補が必要です。")
     if operation == "generate" and source_candidate is not None:
         raise GenerationPlanError("新規生成計画に編集元候補は指定できません。")
 
@@ -266,7 +266,7 @@ def _create_plan(
     with ProjectLock(root):
         current_project = get_project(project.id, projects_dir=projects_dir)
         if current_project.status != "active":
-            raise GenerationPlanError("アーカイブ済み案件では計画を作成できません。")
+            raise GenerationPlanError("アーカイブ済み案件では生成計画を作成できません。")
         references = _reference_snapshots(project.id, reference_ids or [], projects_dir=projects_dir)
         requirements = _requirement_snapshots(project.id, projects_dir=projects_dir)
         requested_count, count_source = _resolved_count(count, config_path=config_path)
@@ -406,9 +406,9 @@ def get_generation(
         if path.is_file():
             generation = read_model(path, Generation)
             if generation.project_id != project.id:
-                raise StorageError(f"実験の案件IDと保存場所が一致しません: {path}")
+                raise StorageError(f"生成計画の案件IDと保存場所が一致しません: {path}")
             return generation, root
-    raise LookupError(f"実験が見つかりません: {normalized_id}")
+    raise LookupError(f"生成計画が見つかりません: {normalized_id}")
 
 
 def list_generations(
@@ -416,10 +416,19 @@ def list_generations(
 ) -> list[Generation]:
     project = get_project(project_id, projects_dir=projects_dir)
     root = project_root(project.id, projects_dir=projects_dir)
-    records = [
-        read_model(path, Generation)
-        for path in (root / "generations").glob("*/generation.json")
-    ]
+    records = []
+    for path in (root / "generations").glob("*/generation.json"):
+        if path.parent.name.startswith(".iwb-plan-"):
+            continue
+        try:
+            directory_id = parse_uuid4(path.parent.name)
+            safe_path = safe_project_path(root, f"generations/{path.parent.name}/generation.json")
+        except ValueError as exc:
+            raise StorageError("生成計画の保存先が不正です。元データを保持して確認してください。") from exc
+        generation = read_model(safe_path, Generation)
+        if generation.id != directory_id or generation.project_id != project.id:
+            raise StorageError("生成計画IDまたは案件IDが保存先と一致しません。元データを保持して確認してください。")
+        records.append(generation)
     return sorted(records, key=lambda item: (item.created_at, str(item.id)), reverse=True)
 
 
@@ -535,7 +544,7 @@ def cancel_generation(
             raise GenerationExecutionError("state_conflict", "アーカイブ済み案件は変更できません。", exit_code=4)
         if generation.status not in {"draft", "awaiting_approval"}:
             raise GenerationExecutionError(
-                "state_conflict", f"この状態の計画は取消せません: {generation.status}", exit_code=4
+                "state_conflict", f"この状態の生成計画は取消せません: {generation.status}", exit_code=4
             )
         previous = generation
         generation = _generation_with(
@@ -554,7 +563,7 @@ def cancel_generation(
 def request_generation_approval(
     generation_id: str | UUID, *, projects_dir: Path | None = None
 ) -> Generation:
-    """会話で計画を提示したことを記録し、承認待ちにする。"""
+    """会話で生成計画を提示したことを記録し、承認待ちにする。"""
     generation, root = get_generation(generation_id, projects_dir=projects_dir)
     with ProjectLock(root):
         generation, _ = get_generation(generation_id, projects_dir=projects_dir)
@@ -680,7 +689,7 @@ def fail_generation(
         generation, _ = get_generation(generation_id, projects_dir=projects_dir)
         if generation.status not in {"running", "result_unknown"} or generation.candidate_ids:
             raise GenerationExecutionError(
-                "state_conflict", "出力が未登録で、実行中または結果不明の計画だけ失敗確定できます。", exit_code=4
+                "state_conflict", "出力が未登録で、実行中または結果不明の生成計画だけ失敗確定できます。", exit_code=4
             )
         now = datetime.now(timezone.utc)
         previous = generation
@@ -731,7 +740,7 @@ def register_generation_files(
         generation, _ = get_generation(generation_id, projects_dir=projects_dir)
         if generation.status not in {"running", "result_unknown"}:
             raise GenerationExecutionError(
-                "state_conflict", f"この状態の計画には画像を登録できません: {generation.status}", exit_code=4
+                "state_conflict", f"この状態の生成計画には画像を登録できません: {generation.status}", exit_code=4
             )
         try:
             verify_plan(generation, root)
@@ -752,7 +761,7 @@ def register_generation_files(
                 if digest in existing_hashes:
                     raise GenerationExecutionError(
                         "duplicate_output",
-                        f"この計画に同じ画像が既に登録されています: {existing_hashes[digest]}",
+                        f"この生成計画に同じ画像が既に登録されています: {existing_hashes[digest]}",
                         exit_code=4,
                     )
                 seen_hashes.add(digest)

@@ -67,6 +67,7 @@ from image_workbench.generations import (
     cancel_generation,
     fail_generation,
     get_generation,
+    list_generations,
     mark_generation_unknown,
     plan_edit,
     plan_generate,
@@ -103,12 +104,12 @@ reference_app = typer.Typer(
     add_completion=False,
 )
 generate_app = typer.Typer(
-    help="画像生成計画と実験を管理します。",
+    help="生成計画を管理します。",
     no_args_is_help=True,
     add_completion=False,
 )
 edit_app = typer.Typer(
-    help="候補画像の編集計画と実験を管理します。",
+    help="候補画像を編集する生成計画を管理します。",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -118,7 +119,7 @@ candidate_app = typer.Typer(
     add_completion=False,
 )
 report_app = typer.Typer(
-    help="実験レポートを表示または開きます。",
+    help="生成計画レポートを表示または開きます。",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -741,10 +742,10 @@ def _show_generation(generation: Generation) -> None:
     except (LookupError, OSError, StorageError) as exc:
         console.print(f"[red]案件情報を読み込めませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
-    table = Table(title=f"計画: {project.name}")
+    table = Table(title=f"生成計画: {project.name}")
     table.add_column("項目", style="cyan")
     table.add_column("内容")
-    table.add_row("実験ID", str(generation.id))
+    table.add_row("生成計画ID", str(generation.id))
     table.add_row("操作", generation.operation)
     table.add_row("状態", generation.status)
     table.add_row("Plan hash", generation.plan_hash)
@@ -775,7 +776,7 @@ def _show_generation(generation: Generation) -> None:
         table.add_row("停止・失敗記録", str(generation.errors))
     console.print(table)
     if generation.reference_snapshots:
-        refs = Table(title="計画に含む参照画像")
+        refs = Table(title="生成計画に含む参照画像")
         refs.add_column("参照ID", style="cyan")
         refs.add_column("役割")
         refs.add_column("優先度")
@@ -796,7 +797,7 @@ def _show_generation(generation: Generation) -> None:
 
 
 def _refresh_candidate_report(candidate_id: str) -> None:
-    """候補操作後、既に作成済みの実験レポートを最新化する。"""
+    """候補操作後、既に作成済みの生成計画レポートを最新化する。"""
     try:
         candidate, _, root = find_candidate(candidate_id)
         report_path = root / "reports" / f"{candidate.generation_id}.json"
@@ -815,19 +816,19 @@ def _register_generation_command(generation_id: str, image_paths: list[Path]) ->
         generation, root = get_generation(generation_id)
         verify_plan(generation, root)
     except ValueError as exc:
-        console.print(f"[red]実験IDまたは計画が不正です:[/red] {exc}")
+        console.print(f"[red]生成計画IDまたは内容が不正です:[/red] {exc}")
         raise typer.Exit(code=2) from exc
     except LookupError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=4) from exc
     except (OSError, StorageError) as exc:
-        console.print(f"[red]実験を読み込めませんでした:[/red] {exc}")
+        console.print(f"[red]生成計画を読み込めませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
 
     _show_generation(generation)
     console.print("画像生成は行いません。Codex会話から保存した画像ファイルを検証・登録します。")
     if generation.status == "result_unknown" and not typer.confirm(
-        "Codex会話でこのファイルが対象計画の生成結果だと確認しましたか？", default=False
+        "Codex会話でこのファイルが対象生成計画の生成結果だと確認しましたか？", default=False
     ):
         console.print("結果不明のままです。画像登録を中止しました。")
         raise typer.Exit(code=130)
@@ -843,7 +844,7 @@ def _register_generation_command(generation_id: str, image_paths: list[Path]) ->
         console.print(f"[red]案件が使用中です:[/red] {exc}")
         raise typer.Exit(code=4) from exc
     except (OSError, StorageError) as exc:
-        console.print(f"[red]実験記録を保存できませんでした:[/red] {exc}")
+        console.print(f"[red]生成計画記録を保存できませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
     console.print(
         f"画像を登録しました: {completed.id} "
@@ -869,7 +870,7 @@ def _record_generation_action(action: str, generation_id: str, **kwargs: object)
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=exc.exit_code) from exc
     except ValueError as exc:
-        console.print(f"[red]入力または計画が不正です:[/red] {exc}")
+        console.print(f"[red]入力または生成計画が不正です:[/red] {exc}")
         raise typer.Exit(code=2) from exc
     except LookupError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -887,30 +888,30 @@ def _record_generation_action(action: str, generation_id: str, **kwargs: object)
     except Exception as exc:
         console.print(
             "[yellow]状態とイベントは記録済みですが、レポートを更新できませんでした。"
-            f"実験ID: {generation.id} / エラー: {type(exc).__name__}[/yellow]"
+            f"生成計画ID: {generation.id} / エラー: {type(exc).__name__}[/yellow]"
         )
 
     messages = {
-        "request-approval": "計画を提示し、承認待ちとして記録しました。",
+        "request-approval": "生成計画を提示し、承認待ちとして記録しました。",
         "approve": "会話での明示承認と生成開始を記録しました。続けてCodex会話で画像生成を行ってください。",
         "block": "生成開始前の停止を記録しました。",
         "mark-unknown": "結果不明として記録しました。確認が済むまで再生成しないでください。",
         "fail": "生成開始後の明確な失敗を記録しました。",
         "cancel": "承認前の取消を記録しました。",
     }
-    console.print(f"{messages[action]} 実験ID: {generation.id} / 状態: {generation.status}")
+    console.print(f"{messages[action]} 生成計画ID: {generation.id} / 状態: {generation.status}")
 
 
 def _add_generation_lifecycle_commands(group: typer.Typer) -> None:
     """generate/edit共通の会話状態記録コマンドを登録する。"""
-    def request_approval(generation_id: str = typer.Argument(..., help="計画ID（UUID v4）")) -> None:
+    def request_approval(generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）")) -> None:
         _record_generation_action("request-approval", generation_id)
 
-    def approve(generation_id: str = typer.Argument(..., help="計画ID（UUID v4）")) -> None:
+    def approve(generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）")) -> None:
         _record_generation_action("approve", generation_id)
 
     def block(
-        generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+        generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）"),
         reason_code: Literal["usage_limit_reached", "codex_imagegen_unavailable", "output_unavailable"] = typer.Option(
             ..., "--reason-code", help="生成開始前に停止した理由"
         ),
@@ -919,13 +920,13 @@ def _add_generation_lifecycle_commands(group: typer.Typer) -> None:
         _record_generation_action("block", generation_id, reason_code=reason_code, message=message)
 
     def mark_unknown(
-        generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+        generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）"),
         reason: str = typer.Option(..., "--reason", help="結果を確定できない理由"),
     ) -> None:
         _record_generation_action("mark-unknown", generation_id, reason=reason)
 
     def fail(
-        generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+        generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）"),
         reason_code: Literal["codex_imagegen_unavailable", "output_transfer_failed", "disk_full", "permission_denied"] = typer.Option(
             ..., "--reason-code", help="生成開始後に確認された失敗理由"
         ),
@@ -934,7 +935,7 @@ def _add_generation_lifecycle_commands(group: typer.Typer) -> None:
         _record_generation_action("fail", generation_id, reason_code=reason_code, message=message)
 
     def cancel(
-        generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+        generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）"),
         reason: str = typer.Option(..., "--reason", help="取消理由"),
     ) -> None:
         _record_generation_action("cancel", generation_id, reason=reason)
@@ -949,6 +950,45 @@ def _add_generation_lifecycle_commands(group: typer.Typer) -> None:
 
 _add_generation_lifecycle_commands(generate_app)
 _add_generation_lifecycle_commands(edit_app)
+
+
+@generate_app.command("list")
+def generate_list_command(
+    project_id: str = typer.Argument(..., help="案件ID（UUID v4）"),
+    terminal: bool = typer.Option(False, "--terminal", help="エディタを開かず全文を端末へ表示"),
+) -> None:
+    """案件内の生成計画（新規生成・編集）を全状態、新しい順で一覧表示します。"""
+    try:
+        generations = list_generations(project_id)
+    except ConfigError as exc:
+        console.print(f"[red]設定エラー:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    except ValueError as exc:
+        console.print(f"[red]案件IDが不正です:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    except LookupError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=4) from exc
+    except OSError as exc:
+        console.print(f"[red]生成計画一覧を読み込めませんでした:[/red] {exc}")
+        raise typer.Exit(code=6) from exc
+    _show_list(f"生成計画一覧 / 案件ID: {project_id}", [
+        [
+            ("生成計画ID（Generation ID）", generation.id),
+            ("操作", generation.operation), ("状態", generation.status),
+            ("作成日時(UTC)", generation.created_at.isoformat()),
+            ("プロンプト", generation.original_instruction),
+            ("指定参照", "\n".join(
+                f"{ref.id} / {ref.role} / 優先度 {ref.priority} / {ref.description}"
+                for ref in generation.reference_snapshots
+            ) or "なし"),
+            ("希望枚数（目安）", generation.requested_count_hint),
+            ("登録候補数", generation.registered_candidate_count),
+            ("編集元候補ID", generation.source_candidate_id or "なし"),
+            ("Plan hash（生成計画IDとは別）", generation.plan_hash),
+        ]
+        for generation in generations
+    ], terminal=terminal)
 
 
 @generate_app.command("plan")
@@ -967,7 +1007,7 @@ def generate_plan_command(
             count=count,
         )
     except GenerationPlanError as exc:
-        console.print(f"[red]計画を作成できません:[/red] {exc}")
+        console.print(f"[red]生成計画を作成できません:[/red] {exc}")
         raise typer.Exit(code=3) from exc
     except LookupError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -976,32 +1016,32 @@ def generate_plan_command(
         console.print(f"[red]案件が使用中です:[/red] {exc}")
         raise typer.Exit(code=4) from exc
     except (OSError, StorageError) as exc:
-        console.print(f"[red]計画を保存できませんでした:[/red] {exc}")
+        console.print(f"[red]生成計画を保存できませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
     _show_generation(generation)
-    console.print("計画を保存しました。Codex会話で内容を確認してから画像を生成してください。")
+    console.print("生成計画を保存しました。Codex会話で内容を確認してから画像を生成してください。")
 
 
 @generate_app.command("show")
-def generate_show_command(generation_id: str = typer.Argument(..., help="実験ID（UUID v4）")) -> None:
-    """生成計画と実験結果を表示します。"""
+def generate_show_command(generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）")) -> None:
+    """生成計画と実行結果を表示します。"""
     try:
         generation, _ = get_generation(generation_id)
     except ValueError as exc:
-        console.print(f"[red]実験IDまたは計画が不正です:[/red] {exc}")
+        console.print(f"[red]生成計画IDまたは内容が不正です:[/red] {exc}")
         raise typer.Exit(code=2) from exc
     except LookupError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=4) from exc
     except (OSError, StorageError) as exc:
-        console.print(f"[red]実験を読み込めませんでした:[/red] {exc}")
+        console.print(f"[red]生成計画を読み込めませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
     _show_generation(generation)
 
 
 @generate_app.command("register")
 def generate_register_command(
-    generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+    generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）"),
     image_paths: list[Path] = typer.Argument(..., help="Codex会話から保存した画像ファイル"),
 ) -> None:
     """画像を検証して生成候補として登録します。"""
@@ -1009,13 +1049,13 @@ def generate_register_command(
 
 
 @report_app.command("show")
-def report_show_command(generation_id: str = typer.Argument(..., help="実験ID（UUID v4）")) -> None:
-    """実験のMarkdownレポートを表示します。"""
+def report_show_command(generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）")) -> None:
+    """生成計画のMarkdownレポートを表示します。"""
     try:
         generation, root = get_generation(generation_id)
         report = read_report(root, str(generation.id))
     except ValueError as exc:
-        console.print(f"[red]実験IDが不正です:[/red] {exc}")
+        console.print(f"[red]生成計画IDが不正です:[/red] {exc}")
         raise typer.Exit(code=2) from exc
     except LookupError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -1027,15 +1067,15 @@ def report_show_command(generation_id: str = typer.Argument(..., help="実験ID�
 
 
 @report_app.command("open")
-def report_open_command(generation_id: str = typer.Argument(..., help="実験ID（UUID v4）")) -> None:
-    """実験のMarkdownレポートを既定の関連アプリで開きます。"""
+def report_open_command(generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）")) -> None:
+    """生成計画のMarkdownレポートを既定の関連アプリで開きます。"""
     try:
         generation, root = get_generation(generation_id)
         path = root / "reports" / f"{generation.id}.md"
         if not path.is_file():
             raise FileNotFoundError("レポートファイルがありません。")
     except ValueError as exc:
-        console.print(f"[red]実験IDが不正です:[/red] {exc}")
+        console.print(f"[red]生成計画IDが不正です:[/red] {exc}")
         raise typer.Exit(code=2) from exc
     except LookupError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -1061,7 +1101,7 @@ def edit_plan_command(
     reference_ids: list[str] = typer.Option([], "--reference", help="送信する追加参照ID（複数指定可）"),
     count: int | None = typer.Option(None, "--count", min=1, max=10, help="希望枚数の目安（1〜10）"),
 ) -> None:
-    """Codex会話用の候補編集計画を保存します。画像生成は行いません。"""
+    """Codex会話用の候補画像を編集する生成計画を保存します。画像生成は行いません。"""
     try:
         generation = plan_edit(
             project_id,
@@ -1071,7 +1111,7 @@ def edit_plan_command(
             count=count,
         )
     except GenerationPlanError as exc:
-        console.print(f"[red]編集計画を作成できません:[/red] {exc}")
+        console.print(f"[red]編集用の生成計画を作成できません:[/red] {exc}")
         raise typer.Exit(code=3) from exc
     except ValueError as exc:
         console.print(f"[red]入力が不正です:[/red] {exc}")
@@ -1083,21 +1123,21 @@ def edit_plan_command(
         console.print(f"[red]案件が使用中です:[/red] {exc}")
         raise typer.Exit(code=4) from exc
     except (OSError, StorageError) as exc:
-        console.print(f"[red]編集計画を保存できませんでした:[/red] {exc}")
+        console.print(f"[red]編集用の生成計画を保存できませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
     _show_generation(generation)
-    console.print("編集計画を保存しました。Codex会話で内容を確認してから画像を編集してください。")
+    console.print("編集用の生成計画を保存しました。Codex会話で内容を確認してから画像を編集してください。")
 
 
 @edit_app.command("show")
-def edit_show_command(generation_id: str = typer.Argument(..., help="実験ID（UUID v4）")) -> None:
-    """編集計画と実験結果を表示します。"""
+def edit_show_command(generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）")) -> None:
+    """編集用の生成計画と実行結果を表示します。"""
     generate_show_command(generation_id)
 
 
 @edit_app.command("register")
 def edit_register_command(
-    generation_id: str = typer.Argument(..., help="計画ID（UUID v4）"),
+    generation_id: str = typer.Argument(..., help="生成計画ID（UUID v4）"),
     image_paths: list[Path] = typer.Argument(..., help="Codex会話から保存した編集画像ファイル"),
 ) -> None:
     """編集した画像を検証して候補として登録します。"""
@@ -1107,10 +1147,10 @@ def edit_register_command(
 @candidate_app.command("list")
 def candidate_list_command(
     project_id: str = typer.Argument(..., help="案件ID（UUID v4）"),
-    generation_id: str | None = typer.Option(None, "--generation", help="実験IDで絞り込み"),
+    generation_id: str | None = typer.Option(None, "--generation", help="生成計画IDで絞り込み"),
     terminal: bool = typer.Option(False, "--terminal", help="エディタを開かず全文を端末へ表示"),
 ) -> None:
-    """候補を案件または実験ごとに一覧表示します。"""
+    """候補を案件または生成計画ごとに一覧表示します。"""
     try:
         candidates = list_candidates(project_id, generation_id=generation_id)
     except ValueError as exc:
@@ -1123,7 +1163,7 @@ def candidate_list_command(
         console.print(f"[red]候補一覧を読み込めませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
     _show_list(f"候補一覧 / 案件ID: {project_id}", [
-        [("候補ID", candidate.id), ("実験ID", candidate.generation_id), ("状態", candidate.status),
+        [("候補ID", candidate.id), ("生成計画ID", candidate.generation_id), ("状態", candidate.status),
          ("寸法", f"{candidate.width}×{candidate.height}"),
          ("親候補", candidate.parent_candidate_id or "なし"), ("SHA-256", candidate.sha256)]
         for candidate in candidates
@@ -1150,7 +1190,7 @@ def candidate_show_command(candidate_id: str = typer.Argument(..., help="候補I
     table.add_column("項目", style="cyan")
     table.add_column("値")
     table.add_row("案件", f"{project.name} ({project.id})")
-    table.add_row("実験ID", str(candidate.generation_id))
+    table.add_row("生成計画ID", str(candidate.generation_id))
     table.add_row("状態", candidate.status)
     table.add_row("画像", candidate.file)
     table.add_row("画像の存在", "あり" if image_path.is_file() else "なし")
@@ -1371,7 +1411,7 @@ def candidate_hold_command(
 
 @app.command("status")
 def status_show(project_id: str | None = typer.Argument(None, help="案件ID（省略時は全案件）")) -> None:
-    """案件の状態、実験、レビュー待ち、次の操作を表示します。"""
+    """案件の状態、生成計画、レビュー待ち、次の操作を表示します。"""
     try:
         if project_id is None:
             projects = list_projects()
@@ -1422,7 +1462,7 @@ def status_show(project_id: str | None = typer.Argument(None, help="案件ID（�
         if item.status in {"draft", "awaiting_approval", "running", "result_unknown"}
     ]
     table.add_row(
-        "進行中・未確認の実験",
+        "進行中・未確認の生成計画",
         ", ".join(f"{item.id} ({item.status})" for item in active_generations) or "なし",
     )
     pending_review = [
@@ -1436,13 +1476,13 @@ def status_show(project_id: str | None = typer.Argument(None, help="案件ID（�
         current = active_generations[-1]
         command = "generate" if current.operation == "generate" else "edit"
         next_action = {
-            "draft": f"計画を提示し、承認待ちを記録してください: iwb {command} request-approval {current.id}",
+            "draft": f"生成計画を提示し、承認待ちを記録してください: iwb {command} request-approval {current.id}",
             "awaiting_approval": f"明示承認後に承認を記録してください: iwb {command} approve {current.id}",
             "running": f"会話結果を確認し、画像を登録または状態を記録してください: iwb {command} show {current.id}",
             "result_unknown": f"確認するまで再生成しないでください: iwb {command} show {current.id}",
         }[current.status]
     elif generations and generations[-1].status == "blocked":
-        next_action = "利用上限回復を確認し、利用者が新しい計画を依頼した場合にだけ再開してください。"
+        next_action = "利用上限回復を確認し、利用者が新しい生成計画を依頼した場合にだけ再開してください。"
     elif pending_review:
         next_action = f"候補を比較してレビューしてください: iwb review {pending_review[0].id}"
     elif generations and generations[-1].status in {"failed", "partially_succeeded"}:
