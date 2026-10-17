@@ -65,6 +65,32 @@ iwb project export <project-id>
 
 既存JSONの変更やデータ移行は不要です。追加仕様は[Notion仕様書のver4.1追補（第14節）](https://app.notion.com/p/3f4f252ab68381e8bc40dc251b3ca08c)を参照してください。
 
+## 一覧キャッシュとエディタ表示（ver4.2）
+
+`project list`・`reference list`・`requirement list`・`candidate list` は、対話端末では実行時点の完全なIDと説明をキャッシュに保存してVS Codeへ表示を依頼します。コマンドは待機せず戻るため、一覧を開いたままコピーして次の操作に使用できます。タブやエディタを閉じる操作は不要で、キャッシュは自動削除しません。
+
+```powershell
+iwb project list
+iwb reference list <project-id>
+iwb requirement list <project-id>
+iwb candidate list <project-id> --generation <generation-id>
+# エディタを開かず、端末に全文を表示
+iwb project list --terminal
+```
+
+非対話実行・リダイレクト・0件ではエディタとキャッシュを作りません。codeコマンドが見つからない場合や起動要求が失敗した場合は、保存したキャッシュを保持して全文を端末に表示します。キャッシュの編集は案件に反映しません。
+
+Windowsの保存先は `%LOCALAPPDATA%/ImageWorkbench/cache/lists/<キャッシュID>/listing.txt` です。LOCALAPPDATAがない場合と他OSは `~/.cache/image-workbench/lists/` を使います。各実行で別IDを発行し、取得日時と一覧を保持します。不要になったら次のコマンドで対象を確認して削除します。
+
+```powershell
+iwb cache clear                  # 一覧キャッシュ全件
+iwb cache clear <cache-id>       # 指定した一覧キャッシュだけ
+```
+
+表示中の一覧も削除対象にできますが、VS Codeを終了させることはありません。確認後に新しく作られたキャッシュは削除しません。未知・破損した記録、リンク、想定外のファイルは保持します。案件データ・exports・エディタ自身の履歴は対象外です。
+
+変更点のみを記載した[Notion仕様書 ver4.2](https://app.notion.com/p/3fcf252ab68381abb8eed67a27a47e71)とver4.1を併せて適用します。案件データの形式変更・移行は不要です。
+
 ## 実装状況
 
 ver3向けのローカル管理基盤が存在しますが、Codex会話連携とver4の受け入れ条件への適合は作業中です。未実装の機能を完成済みとは扱いません。実際の画像生成を試す場合は、対象計画、入力画像、利用枠の状態を会話で確認し、個別に承認します。

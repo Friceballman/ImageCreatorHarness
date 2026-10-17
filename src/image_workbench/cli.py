@@ -6,6 +6,7 @@ import typer
 from pathlib import Path
 import os
 import subprocess
+import sys
 from rich.console import Console
 from rich.table import Table
 from typing import Literal
@@ -13,6 +14,7 @@ from typing import Literal
 from image_workbench.config import ConfigError, ResolvedConfig, load_config
 from image_workbench.exports import export_selected_candidates, selected_candidates
 from image_workbench.ids import parse_uuid4
+from image_workbench.list_view import cache_root, clear_caches, list_caches, show_listing
 from image_workbench.projects import (
     archive_project,
     create_project,
@@ -120,6 +122,11 @@ report_app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+cache_app = typer.Typer(
+    help="一覧表示用のキャッシュを管理します。",
+    no_args_is_help=True,
+    add_completion=False,
+)
 console = Console()
 app.add_typer(config_app, name="config")
 app.add_typer(project_app, name="project")
@@ -129,6 +136,7 @@ app.add_typer(generate_app, name="generate")
 app.add_typer(edit_app, name="edit")
 app.add_typer(candidate_app, name="candidate")
 app.add_typer(report_app, name="report")
+app.add_typer(cache_app, name="cache")
 
 
 def _config_rows(config: ResolvedConfig) -> list[tuple[str, str, str]]:
@@ -180,8 +188,58 @@ def project_create(
     console.print(f"案件を作成しました: {project.name} ({project.id})")
 
 
+def _show_list(title: str, records: list[list[tuple[str, object]]], *, terminal: bool) -> None:
+    try:
+        show_listing(title, records, terminal=terminal)
+    except OSError as exc:
+        console.print(f"[red]一覧キャッシュを保存・表示できませんでした:[/red] {exc}")
+        raise typer.Exit(code=6) from exc
+
+
+@cache_app.command("clear")
+def cache_clear_command(
+    cache_id: str | None = typer.Argument(None, help="削除するキャッシュID（省略時は全一覧キャッシュ）"),
+) -> None:
+    """一覧キャッシュを確認後に削除します。案件データは削除しません。"""
+    try:
+        identifier = parse_uuid4(cache_id) if cache_id is not None else None
+    except ValueError as exc:
+        console.print(f"[red]キャッシュIDが不正です:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    try:
+        records, warnings = list_caches()
+        for warning in warnings:
+            print(warning, file=sys.stderr)
+        if identifier is not None:
+            records = [record for record in records if record.id == identifier]
+            if not records:
+                console.print("[red]指定された有効な一覧キャッシュが見つかりません。[/red]")
+                raise typer.Exit(code=4)
+        if not records:
+            console.print("削除対象の一覧キャッシュは0件です。")
+            return
+        sys.stdout.write(f"一覧キャッシュの保存先: {cache_root()}\n")
+        for record in records:
+            sys.stdout.write(f"{record.id} / {record.created_at.isoformat()} / {record.title}\n")
+        console.print(f"削除対象: {len(records)}件。VS Codeで表示中のキャッシュも対象になります。")
+        if not typer.confirm("これらの一覧キャッシュを削除しますか？", default=False):
+            console.print("一覧キャッシュの削除を中止しました。")
+            raise typer.Exit(code=130)
+        removed, errors = clear_caches([record.id for record in records])
+        console.print(f"一覧キャッシュを削除しました: {removed}件")
+        for error in errors:
+            print(error, file=sys.stderr)
+        if errors:
+            raise typer.Exit(code=6)
+    except OSError as exc:
+        console.print(f"[red]一覧キャッシュを削除できませんでした:[/red] {exc}")
+        raise typer.Exit(code=6) from exc
+
+
 @project_app.command("list")
-def project_list() -> None:
+def project_list(
+    terminal: bool = typer.Option(False, "--terminal", help="エディタを開かず全文を端末へ表示"),
+) -> None:
     """案件一覧を表示します。"""
     try:
         projects = list_projects()
@@ -189,14 +247,10 @@ def project_list() -> None:
         console.print(f"[red]案件一覧を読み込めませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
 
-    table = Table(title="案件一覧")
-    table.add_column("案件ID", style="cyan")
-    table.add_column("名前")
-    table.add_column("状態")
-    table.add_column("目的")
-    for project in projects:
-        table.add_row(str(project.id), project.name, project.status, project.goal)
-    console.print(table)
+    _show_list("案件一覧", [
+        [("案件ID", project.id), ("名前", project.name), ("状態", project.status), ("目的", project.goal)]
+        for project in projects
+    ], terminal=terminal)
 
 
 @project_app.command("show")
@@ -401,7 +455,10 @@ def requirement_add(
 
 
 @requirement_app.command("list")
-def requirement_list(project_id: str = typer.Argument(..., help="案件ID（UUID v4）")) -> None:
+def requirement_list(
+    project_id: str = typer.Argument(..., help="案件ID（UUID v4）"),
+    terminal: bool = typer.Option(False, "--terminal", help="エディタを開かず全文を端末へ表示"),
+) -> None:
     """有効な制作要件を一覧表示します。"""
     try:
         items = list_requirements(project_id)
@@ -415,14 +472,10 @@ def requirement_list(project_id: str = typer.Argument(..., help="案件ID（UUID
         console.print(f"[red]要件一覧を読み込めませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
 
-    table = Table(title="有効な制作要件")
-    table.add_column("要件ID", style="cyan")
-    table.add_column("区分")
-    table.add_column("優先度")
-    table.add_column("要件")
-    for item in items:
-        table.add_row(str(item.id), item.category, str(item.priority), item.description)
-    console.print(table)
+    _show_list(f"有効な制作要件 / 案件ID: {project_id}", [
+        [("要件ID", item.id), ("区分", item.category), ("優先度", item.priority), ("要件", item.description)]
+        for item in items
+    ], terminal=terminal)
 
 
 @requirement_app.command("update")
@@ -584,7 +637,10 @@ def reference_add(
 
 
 @reference_app.command("list")
-def reference_list(project_id: str = typer.Argument(..., help="案件ID（UUID v4）")) -> None:
+def reference_list(
+    project_id: str = typer.Argument(..., help="案件ID（UUID v4）"),
+    terminal: bool = typer.Option(False, "--terminal", help="エディタを開かず全文を端末へ表示"),
+) -> None:
     """案件の参照画像一覧を表示します。"""
     try:
         references = list_references(project_id)
@@ -598,18 +654,11 @@ def reference_list(project_id: str = typer.Argument(..., help="案件ID（UUID v
         console.print(f"[red]参照画像一覧を読み込めませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
 
-    table = Table(title="参照画像一覧")
-    table.add_column("参照ID", style="cyan")
-    table.add_column("役割")
-    table.add_column("優先度")
-    table.add_column("説明")
-    table.add_column("ファイル")
-    for reference in references:
-        table.add_row(
-            str(reference.id), reference.role, str(reference.priority),
-            reference.description, reference.file,
-        )
-    console.print(table)
+    _show_list(f"参照画像一覧 / 案件ID: {project_id}", [
+        [("参照ID", reference.id), ("役割", reference.role), ("優先度", reference.priority),
+         ("説明", reference.description), ("ファイル", reference.file)]
+        for reference in references
+    ], terminal=terminal)
 
 
 @reference_app.command("show")
@@ -1059,6 +1108,7 @@ def edit_register_command(
 def candidate_list_command(
     project_id: str = typer.Argument(..., help="案件ID（UUID v4）"),
     generation_id: str | None = typer.Option(None, "--generation", help="実験IDで絞り込み"),
+    terminal: bool = typer.Option(False, "--terminal", help="エディタを開かず全文を端末へ表示"),
 ) -> None:
     """候補を案件または実験ごとに一覧表示します。"""
     try:
@@ -1072,20 +1122,12 @@ def candidate_list_command(
     except (OSError, StorageError) as exc:
         console.print(f"[red]候補一覧を読み込めませんでした:[/red] {exc}")
         raise typer.Exit(code=6) from exc
-    table = Table(title="候補一覧")
-    table.add_column("候補ID", style="cyan")
-    table.add_column("実験ID")
-    table.add_column("状態")
-    table.add_column("寸法")
-    table.add_column("親候補")
-    table.add_column("SHA-256")
-    for candidate in candidates:
-        table.add_row(
-            str(candidate.id), str(candidate.generation_id), candidate.status,
-            f"{candidate.width}×{candidate.height}",
-            str(candidate.parent_candidate_id or "なし"), candidate.sha256,
-        )
-    console.print(table)
+    _show_list(f"候補一覧 / 案件ID: {project_id}", [
+        [("候補ID", candidate.id), ("実験ID", candidate.generation_id), ("状態", candidate.status),
+         ("寸法", f"{candidate.width}×{candidate.height}"),
+         ("親候補", candidate.parent_candidate_id or "なし"), ("SHA-256", candidate.sha256)]
+        for candidate in candidates
+    ], terminal=terminal)
 
 
 @candidate_app.command("show")

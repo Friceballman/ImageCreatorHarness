@@ -2,7 +2,7 @@
 
 作成日：2026-10-16。対象：Windows / PowerShell、Python 3.12以上、Image Workbench 0.1.0。
 
-仕様の基準は[仕様書 ver4（Codex会話環境版）](https://app.notion.com/p/3f4f252ab68381e8bc40dc251b3ca08c)。このマニュアルは、同仕様と作成時点の `src/image_workbench/` の実装を照合して作成した操作案内です。実際の画像生成を含む一連の動作の合格報告ではありません。
+仕様の基準は[仕様書 ver4.1（Codex会話環境版）](https://app.notion.com/p/3f4f252ab68381e8bc40dc251b3ca08c)と[ver4.2変更点仕様](https://app.notion.com/p/3fcf252ab68381abb8eed67a27a47e71)。このマニュアルは、同仕様と `src/image_workbench/` の実装を照合して作成した操作案内です。実際の画像生成を含む一連の動作の合格報告ではありません。
 
 ## 1. このハーネスで何をするのか
 
@@ -90,6 +90,36 @@ projects_dir = "projects"
 - 画像生成には、対応するCodex/ChatGPT会話環境が必要です。CLI単独では生成できません。
 - APIキーの用意は不要です。生成前に、計画で選んだ画像を会話で実際に参照できることと、結果をローカルファイルとして受け取れることを確認します。
 - 利用枠やクレジット残量をこのハーネスから照会・遮断することはできません。上限が示されたら停止します。追加クレジットを使わない場合は、事前にアカウント側の設定も確認してください。
+
+### 2.4 一覧のIDを省略せず参照する（ver4.2）
+
+`project list`、`reference list`、`requirement list`、`candidate list` は対話端末では実行時点の一覧をキャッシュに保存し、VS Codeへ表示を依頼してすぐに戻ります。件数、完全なID、名前・状態・説明等を項目ごとに表示するため、狭い端末の表組みでIDが省略されることはありません。
+
+```powershell
+iwb project list
+iwb reference list $ProjectId
+iwb requirement list $ProjectId
+iwb candidate list $ProjectId --generation $GenerationId
+# 端末表示を選ぶ場合（4種類のlistで利用可能）
+iwb project list --terminal
+```
+
+タブやVS Codeを閉じる操作は不要です。一覧を開いたままIDをコピーして、次のコマンドに使用できます。キャッシュは自動削除せず、再実行時も別IDで保存します。一覧には取得日時（UTC）を記録し、その後の案件更新には追随しません。編集・保存しても案件には反映しません。
+
+非対話実行・パイプ・リダイレクト・0件ではエディタとキャッシュを作らず、全文を端末に出力します。VS Codeのcodeコマンドがない場合や起動要求が失敗した場合も全文を端末に表示し、作成済みキャッシュは保持します。通常のVS Code Windowsインストールのcode.cmdにも対応し、ユーザー入力をshellのコマンド文字列として実行しません。
+
+Windowsの保存先は `%LOCALAPPDATA%/ImageWorkbench/cache/lists/<キャッシュID>/listing.txt` です。LOCALAPPDATAがない場合と他OSでは `~/.cache/image-workbench/lists/` を使用します。同じフォルダーの `manifest.json` にID・取得日時・一覧名を保存します。不要になったキャッシュは次のコマンドで対象を表示・確認して削除します。
+
+```powershell
+iwb cache clear                 # 一覧キャッシュ全件（確認後）
+iwb cache clear <cache-id>      # 指定した一覧キャッシュだけ（確認後）
+```
+
+一覧をVS Codeで開いたまま削除することもできます。必要な内容は削除前にコピーしてください。この操作はVS Codeの終了を要求せず、エディタの強制終了も行いません。OSが削除を拒否した場合は、削除済み件数と失敗IDを確認して再実行できます。確認後に新しく作られたキャッシュは削除しません。
+
+キャッシュ以外の案件データ・画像・履歴・exportsは削除しません。未知schema・壊れた記録・ID不一致・リンク・想定外のファイルは保持して通知します。エディタ側の履歴・バックアップや、旧方式のOS一時領域の一覧も対象外です。次回起動時や日数経過による自動削除は行いません。
+
+この変更の対象は4種類のlistだけです。status、show、history、compareは従来どおりです。
 
 ## 3. まずはCodexに会話で依頼する
 
